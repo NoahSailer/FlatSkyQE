@@ -36,9 +36,22 @@ class FlatMap(object):
       lx[nX//2+1:] = 2.*np.pi/sizeX * np.arange(-nX//2+1, 0, 1)
       ly = 2.*np.pi/sizeY * np.arange(nY//2+1)
       self.lx, self.ly = np.meshgrid(lx, ly, indexing='ij')
+      # for complex valued inputs
+      lyc = np.zeros(nY)
+      lyc[:nY//2+1] = 2.*np.pi/sizeY * np.arange(nY//2+1)
+      lyc[nY//2+1:] = 2.*np.pi/sizeY * np.arange(-nY//2+1, 0, 1)
+      self.lxc, self.lyc = np.meshgrid(lx, lyc, indexing='ij')
       
       self.l = np.sqrt(self.lx**2 + self.ly**2)
+      self.lc = np.sqrt(self.lxc**2 + self.lyc**2)
       self.dataFourier = np.zeros((nX,nY//2+1))
+
+      # this is the empirical value of (2pi)^2 Delta(l=0)
+      # which is 0.5% different from the volume = sizeX * sizeY
+      # should use twoPiSqDeltaD0 rather than volume when 
+      # computing power spectra
+      oneFourier = self.fourierComplex(data=np.ones((nX,nY)))
+      self.twoPiSqDeltaD0 = np.real(oneFourier[0,0])
    
    def copy(self):
       newMap = FlatMap(nX=self.nX, nY=self.nY, sizeX=self.sizeX, sizeY=self.sizeY, name=self.name)
@@ -420,6 +433,26 @@ class FlatMap(object):
 #      result = pyfftw.interfaces.numpy_fft.irfftn((np.complex128)(dataFourier))
       result /= self.dX * self.dY
       return result
+
+   def fourierComplex(self, data):
+      """Fourier transforms, notmalized such that
+      f(k) = int dx e-ikx f(x)
+      f(x) = int dk/2pi eikx f(k)
+      """
+      # use numpy's fft
+      result = np.fft.fftn(data)
+      result *= self.dX * self.dY
+      return result
+
+   def inverseFourierComplex(self, dataFourier):
+      """Fourier transforms, notmalized such that
+      f(k) = int dx e-ikx f(x)
+      f(x) = int dk/2pi eikx f(k)
+      """
+      # use numpy's fft
+      result = np.fft.ifftn(dataFourier)
+      result /= self.dX * self.dY
+      return result
    
    ###############################################################################
    # Measure power spectrum
@@ -449,7 +482,7 @@ class FlatMap(object):
          Cl, lEdges, binIndices = stats.binned_statistic(ell, power, statistic='mean', bins=lEdges)
          Cl = np.nan_to_num(Cl)
          # finite volume correction
-         Cl /= self.sizeX*self.sizeY
+         Cl /= self.twoPiSqDeltaD0
          # 1sigma uncertainty on Cl
          if fsCl is None:
             sCl = Cl*np.sqrt(2)
@@ -460,19 +493,19 @@ class FlatMap(object):
          power1 = np.real(power1) 
          Cl1, lEdges1, binIndices1 = stats.binned_statistic(ell, power1, statistic='mean', bins=lEdges)
          Cl1 = np.nan_to_num(Cl1)
-         Cl1 /= self.sizeX*self.sizeY
+         Cl1 /= self.twoPiSqDeltaD0
 
          power2 = (dataFourier2 * np.conj(dataFourier2)).flatten()
          power2 = np.real(power2) 
          Cl2, lEdges2, binIndices2 = stats.binned_statistic(ell, power2, statistic='mean', bins=lEdges)
          Cl2 = np.nan_to_num(Cl2)
-         Cl2 /= self.sizeX*self.sizeY
+         Cl2 /= self.twoPiSqDeltaD0
 
          power3 = (dataFourier1 * np.conj(dataFourier2)).flatten()
          power3 = np.real(power3) 
          Cl, lEdges, binIndices = stats.binned_statistic(ell, power3, statistic='mean', bins=lEdges)
          Cl = np.nan_to_num(Cl) 
-         Cl /= self.sizeX*self.sizeY
+         Cl /= self.twoPiSqDeltaD0
          
          if fsCl is None:
             sCl = np.sqrt(Cl**2. + Cl1 * Cl2)
@@ -767,6 +800,7 @@ class FlatMap(object):
       # generate Gaussian white noise in real space
       data = np.zeros_like(self.data)
       data = np.random.normal(loc=0., scale=1./np.sqrt(self.dX*self.dY), size=len(self.x.flatten()))
+      data-= np.mean(data)
       data = data.reshape(np.shape(self.x))
    
       # Fourier transform
@@ -776,8 +810,7 @@ class FlatMap(object):
          self.powerSpectrum(dataFourier, theory=[lambda l:1.], plot=True)
 
       # multiply by desired power spectrum
-      f = lambda l: np.sqrt(fCl(l))
-      clFourier = np.array(list(map(f, self.l.flatten())))
+      clFourier = np.sqrt(fCl(self.l.flatten()))
       clFourier = np.nan_to_num(clFourier)
       clFourier = clFourier.reshape(np.shape(self.l))
       dataFourier *= clFourier
@@ -1666,6 +1699,101 @@ class FlatMap(object):
       return result
 
 
+   def computeNonNormMatrixEffFourier(self, fC0, fCtot, Lv, msk, lMin=1., lMax=1.e5):
+      """
+      computes M_{L,ell} / N_L using FFTs
+      """
+      mskFourier = self.fourierComplex(data=msk)
+       
+      Lx,Ly = Lv[0],Lv[1]   ; L = np.dot(Lv,Lv)**0.5
+
+      def W2m(lx,ly):
+         l = (lx**2.+ly**2.)**0.5
+         Llv = Lv - np.array([lx,ly])
+         Ll = np.dot(Llv,Llv)**0.5
+         # 
+         if (l<lMin) or (l>lMax): return 0.
+         if (Ll<lMin) or (Ll>lMax): return 0.
+         result = divide(fC0(l),fCtot(l)*fCtot(Ll))
+         if not np.isfinite(result): result = 0.
+         return result 
+      w2mFourier = np.array(list(map(W2m, self.lxc.flatten(), self.lyc.flatten())))
+      w2mFourier = w2mFourier.reshape(self.lc.shape) 
+      m1a_x = self.inverseFourierComplex(dataFourier=w2mFourier*self.lxc)
+      m1a_y = self.inverseFourierComplex(dataFourier=w2mFourier*self.lyc)
+
+      def C(l):
+         result = fC0(l)
+         if not np.isfinite(result): result = 0.
+         return result
+      cFourier = np.array(list(map(C, self.lc.flatten())))
+      cFourier = cFourier.reshape(self.lc.shape)
+      m1b_x = self.inverseFourierComplex(dataFourier=cFourier*self.lxc*-1.)
+      m1b_y = self.inverseFourierComplex(dataFourier=cFourier*self.lyc*-1.)
+       
+      m1red_xx_Fourier = self.fourierComplex(data=m1a_x*m1b_x)
+      m1red_xy_Fourier = self.fourierComplex(data=m1a_x*m1b_y)
+      m1red_yx_Fourier = self.fourierComplex(data=m1a_y*m1b_x)
+      m1red_yy_Fourier = self.fourierComplex(data=m1a_y*m1b_y)
+
+      #m1_xx = self.inverseFourierComplex(dataFourier=m1red_xx_Fourier * mskFourier) * msk
+      #m1_xy = self.inverseFourierComplex(dataFourier=m1red_xy_Fourier * mskFourier) * msk
+      #m1_yx = self.inverseFourierComplex(dataFourier=m1red_yx_Fourier * mskFourier) * msk
+      #m1_yy = self.inverseFourierComplex(dataFourier=m1red_yy_Fourier * mskFourier) * msk
+
+      #m1_xx_Fourier = self.fourierComplex(data=m1_xx)
+      #m1_xy_Fourier = self.fourierComplex(data=m1_xy)
+      #m1_yx_Fourier = self.fourierComplex(data=m1_yx)
+      #m1_yy_Fourier = self.fourierComplex(data=m1_yy)
+
+      def W2p(lx,ly):
+         l = (lx**2.+ly**2.)**0.5
+         Llv = Lv + np.array([lx,ly])
+         Ll = np.dot(Llv,Llv)**0.5
+         # 
+         if (l<lMin) or (l>lMax): return 0.
+         if (Ll<lMin) or (Ll>lMax): return 0.
+         result = divide(fC0(l),fCtot(l)*fCtot(Ll))
+         if not np.isfinite(result): result = 0.
+         return result 
+      w2pFourier = np.array(list(map(W2p, self.lxc.flatten(), self.lyc.flatten())))
+      w2pFourier = w2pFourier.reshape(self.lc.shape) 
+      m2a_x = self.inverseFourierComplex(dataFourier=w2pFourier*self.lxc)
+      m2a_y = self.inverseFourierComplex(dataFourier=w2pFourier*self.lyc)
+
+      def C(lx,ly):
+         lLv = np.array([lx,ly])-Lv
+         lL = np.dot(lLv,lLv)**0.5
+         result = fC0(lL)
+         if not np.isfinite(result): result = 0.
+         return result
+      cFourier = np.array(list(map(C, self.lxc.flatten(), self.lyc.flatten())))
+      cFourier = cFourier.reshape(self.lc.shape)
+      m2b_x = self.inverseFourierComplex(dataFourier=cFourier*(self.lxc-Lx))
+      m2b_y = self.inverseFourierComplex(dataFourier=cFourier*(self.lyc-Ly))
+
+      m2red_xx_Fourier = self.fourierComplex(data=m2a_x*m2b_x)
+      m2red_xy_Fourier = self.fourierComplex(data=m2a_x*m2b_y)
+      m2red_yx_Fourier = self.fourierComplex(data=m2a_y*m2b_x)
+      m2red_yy_Fourier = self.fourierComplex(data=m2a_y*m2b_y)
+
+      m_xx = self.inverseFourierComplex(dataFourier=(m1red_xx_Fourier+m2red_xx_Fourier) * mskFourier) * msk
+      m_xy = self.inverseFourierComplex(dataFourier=(m1red_xy_Fourier+m2red_xy_Fourier) * mskFourier) * msk
+      m_yx = self.inverseFourierComplex(dataFourier=(m1red_yx_Fourier+m2red_yx_Fourier) * mskFourier) * msk
+      m_yy = self.inverseFourierComplex(dataFourier=(m1red_yy_Fourier+m2red_yy_Fourier) * mskFourier) * msk
+
+      m_xx_Fourier = self.fourierComplex(data=m_xx)
+      m_xy_Fourier = self.fourierComplex(data=m_xy)
+      m_yx_Fourier = self.fourierComplex(data=m_yx)
+      m_yy_Fourier = self.fourierComplex(data=m_yy)
+
+      resultFourier = m_xx_Fourier*Lx*(Lx-self.lxc) + m_xy_Fourier*Lx*(Ly-self.lyc)
+      resultFourier += m_yx_Fourier*Ly*(Lx-self.lxc) + m_yy_Fourier*Ly*(Ly-self.lyc)
+      resultFourier *= 2/L**2/((Lx-self.lxc)**2 + (Ly-self.lyc)**2 )
+       
+      return np.nan_to_num(resultFourier)
+
+       
 
    def computeQuadEstPhiNormalizationFFT(self, fC0, fCtot, lMin=1., lMax=1.e5, test=False, cache=None):
       """the normalization is N_l^phiphi,
@@ -4378,6 +4506,268 @@ class FlatMap(object):
       return resultFourier
 
 
+   def computePhiFilterForTau(self, fC0, u, lMin=1., lMax=1.e5, test=False, cache=None):
+      '''calculate the response R_L'''
+       
+      # Response calculation
+      def doCalculation():
+         print("Doing full calculation: computePhiFilterForTau")
+          
+         CttFourier = np.array(list(map(fC0, self.l.flatten()))).reshape(self.l.shape)
+         Ctt = self.inverseFourier(dataFourier=CttFourier)
+          
+         WlFourier = np.array(list(map(u, self.l.flatten()))).reshape(self.l.shape)
+         Wl = self.inverseFourier(dataFourier=WlFourier)
+          
+         WhFourier = np.array(list(map(lambda l: 1.-u(l), self.l.flatten()))).reshape(self.l.shape)
+         Wh = self.inverseFourier(dataFourier=WhFourier)
+
+         # term 1x
+         term1x = self.inverseFourier(dataFourier= self.lx * CttFourier * WlFourier)
+         term1x *= Wh
+         term1xFourier = self.fourier(data=term1x)
+         term1xFourier *= self.lx
+         #
+         # term 1y
+         term1y = self.inverseFourier(dataFourier= self.ly * CttFourier * WlFourier)
+         term1y *= Wh
+         term1yFourier = self.fourier(data=term1y)
+         term1yFourier *= self.ly
+
+         # term 2x
+         term2x = self.inverseFourier(dataFourier= self.lx * CttFourier * WhFourier)
+         term2x *= Wl
+         term2xFourier = self.fourier(data=term2x)
+         term2xFourier *= self.lx
+         #
+         # term 2y
+         term2y = self.inverseFourier(dataFourier= self.ly * CttFourier * WhFourier)
+         term2y *= Wl
+         term2yFourier = self.fourier(data=term2y)
+         term2yFourier *= self.ly
+
+         # add all terms
+         resultFourier = term1xFourier + term1yFourier #+ term2xFourier + term2yFourier
+
+         # cut off the high ells from phi normalization map
+         f = lambda l: (l<=2.*lMax)
+         resultFourier = self.filterFourierIsotropic(f, dataFourier=resultFourier, test=False)
+
+         if test:
+            plt.loglog(self.l.flatten(), resultFourier.flatten(), 'b.')
+            plt.show()
+
+         return resultFourier
+
+      # Caching boiler plate
+      # if no caching is desired, just compute
+      if cache is None:
+         resultFourier = doCalculation()
+      # if caching is desired
+      else:
+         # if first call with caching, set up the cache dictionary
+         if not hasattr(self.computePhiFilterForTau.__func__, "cache"):
+            self.computePhiFilterForTau.__func__.cache = {}
+         # if the calculation has been done before
+         if cache in self.computePhiFilterForTau.cache:
+            resultFourier = self.computePhiFilterForTau.cache[cache].copy()
+         # if this calculation was not done before
+         else:
+            resultFourier = doCalculation()
+            self.computePhiFilterForTau.cache[cache] = resultFourier.copy()
+
+      resultFourier = np.nan_to_num(np.real(resultFourier))
+      resultFourier[0,0] = resultFourier[0,1]
+      
+      # interpolate
+      where = (self.l.flatten()>0.)*(self.l.flatten()<2.*lMax)
+      L = self.l.flatten()[where]
+      N = resultFourier.flatten()[where]
+      lnfln = interp1d(np.log(L), np.log(N), kind='linear', bounds_error=False, fill_value=np.inf)
+      f = lambda l: np.exp(lnfln(np.log(l)))
+      return f
+
+   def computeResponseLensPatchyFFT(self, fC0, fCtot, lMin=1., lMax=1.e5, test=False, cache=None):
+      '''calculate the response R_L'''
+       
+      # Response calculation
+      def doCalculation():
+         print("Doing full calculation: computeResponseLensPatchyFFT")
+         # inverse-var weighted map
+         def f(l):
+            if (l<lMin) or (l>lMax):
+               return 0.
+            result = 1./fCtot(l)
+            if not np.isfinite(result):
+               result = 0.
+            return result
+         iVarFourier = np.array(list(map(f, self.l.flatten())))
+         iVarFourier = iVarFourier.reshape(self.l.shape)
+         iVar = self.inverseFourier(dataFourier=iVarFourier)
+         # WF map
+         def f(l):
+            if (l<lMin) or (l>lMax):
+               return 0.
+            result = divide(fC0(l),fCtot(l))
+            if not np.isfinite(result):
+               result = 0.
+            return result
+         WFFourier = np.array(list(map(f, self.l.flatten())))
+         WFFourier = WFFourier.reshape(self.l.shape)
+         WF = self.inverseFourier(dataFourier=WFFourier)
+         # WF2 map
+         def f(l):
+            if (l<lMin) or (l>lMax):
+               return 0.
+            result = divide(fC0(l)**2,fCtot(l))
+            if not np.isfinite(result):
+               result = 0.
+            return result
+         WF2Fourier = np.array(list(map(f, self.l.flatten())))
+         WF2Fourier = WF2Fourier.reshape(self.l.shape)
+         WF2 = self.inverseFourier(dataFourier=WF2Fourier)
+
+         # term 1x
+         term1x = self.inverseFourier(dataFourier= self.lx * WFFourier)
+         term1x *= WF
+         term1xFourier = self.fourier(data=term1x)
+         term1xFourier *= self.lx
+         #
+         # term 1y
+         term1y = self.inverseFourier(dataFourier= self.ly * WFFourier)
+         term1y *= WF
+         term1yFourier = self.fourier(data=term1y)
+         term1yFourier *= self.ly
+
+         # term 2x
+         term2x = self.inverseFourier(dataFourier= self.lx * WF2Fourier)
+         term2x *= iVar
+         term2xFourier = self.fourier(data=term2x)
+         term2xFourier *= self.lx
+         #
+         # term 2y
+         term2y = self.inverseFourier(dataFourier= self.ly * WF2Fourier)
+         term2y *= iVar
+         term2yFourier = self.fourier(data=term2y)
+         term2yFourier *= self.ly
+         
+         # add all terms
+         resultFourier = term1xFourier + term1yFourier + term2xFourier + term2yFourier
+         resultFourier *= -1.
+
+         # cut off the high ells from phi normalization map
+         f = lambda l: (l<=2.*lMax)
+         resultFourier = self.filterFourierIsotropic(f, dataFourier=resultFourier, test=False)
+
+         if test:
+            plt.loglog(self.l.flatten(), resultFourier.flatten(), 'b.')
+            plt.show()
+
+         return resultFourier
+
+      # Caching boiler plate
+      # if no caching is desired, just compute
+      if cache is None:
+         resultFourier = doCalculation()
+      # if caching is desired
+      else:
+         # if first call with caching, set up the cache dictionary
+         if not hasattr(self.computeResponseLensPatchyFFT.__func__, "cache"):
+            self.computeResponseLensPatchyFFT.__func__.cache = {}
+         # if the calculation has been done before
+         if cache in self.computeResponseLensPatchyFFT.cache:
+            resultFourier = self.computeResponseLensPatchyFFT.cache[cache].copy()
+         # if this calculation was not done before
+         else:
+            resultFourier = doCalculation()
+            self.computeResponseLensPatchyFFT.cache[cache] = resultFourier.copy()
+
+      return resultFourier
+
+
+   def computePatchyNormalizationFFT(self, fC0, fCtot, lMin=1., lMax=1.e5, test=False, cache=None):
+      '''calculate the normalization for tau'''
+       
+      # Actual calculation
+      def doCalculation():
+         print("Doing full calculation: computePatchyNormalizationFFT")
+         # inverse-variance
+         def f(l):
+            if (l<lMin) or (l>lMax):
+               return 0.
+            result = 1./fCtot(l)
+            if not np.isfinite(result):
+               result = 0.
+            return result
+         iVarFourier = np.array(list(map(f, self.l.flatten())))
+         iVarFourier = iVarFourier.reshape(self.l.shape)
+         iVar = self.inverseFourier(dataFourier=iVarFourier)
+         # weiner filter
+         def f(l):
+            if (l<lMin) or (l>lMax):
+               return 0.
+            result = divide(fC0(l),fCtot(l))
+            if not np.isfinite(result):
+               result = 0.
+            return result
+         wFiltFourier = np.array(list(map(f, self.l.flatten())))
+         wFiltFourier = wFiltFourier.reshape(self.l.shape)
+         wFilt = self.inverseFourier(dataFourier=wFiltFourier)
+         # weiner2 filter
+         def f(l):
+            if (l<lMin) or (l>lMax):
+               return 0.
+            result = divide(fC0(l)**2,fCtot(l))
+            if not np.isfinite(result):
+               result = 0.
+            return result
+         wFilt2Fourier = np.array(list(map(f, self.l.flatten())))
+         wFilt2Fourier = wFilt2Fourier.reshape(self.l.shape)
+         wFilt2 = self.inverseFourier(dataFourier=wFilt2Fourier)
+         
+         # term 1 (it's the only term)
+         term1 = wFilt*wFilt
+         term1Fourier = self.fourier(data=term1)
+
+         term2 = iVar*wFilt2
+         term2Fourier = self.fourier(data=term2)
+         
+         # renaming the term for consistency
+         resultFourier = term1Fourier + term2Fourier
+
+         # cut off the high ells 
+         f = lambda l: (l<=2.*lMax)
+         resultFourier = self.filterFourierIsotropic(f, dataFourier=resultFourier, test=False)
+
+	 # invert
+         resultFourier = 1./resultFourier
+         resultFourier[np.where(np.isfinite(resultFourier)==False)] = 0.
+
+         if test:
+            plt.loglog(self.l.flatten(), resultFourier.flatten(), 'b.')
+            plt.show()
+         
+         return resultFourier
+
+      # Caching boiler plate
+      # if no caching is desired, just compute
+      if cache is None:
+         resultFourier = doCalculation()
+      # if caching is desired
+      else:
+         # if first call with caching, set up the cache dictionary
+         if not hasattr(self.computePatchyNormalizationFFT.__func__, "cache"):
+            self.computePatchyNormalizationFFT.__func__.cache = {}
+         # if the calculation has been done before
+         if cache in self.computePatchyNormalizationFFT.cache:
+            resultFourier = self.computePatchyNormalizationFFT.cache[cache].copy()
+         # if this calculation was not done before
+         else:
+            resultFourier = doCalculation()
+            self.computePatchyNormalizationFFT.cache[cache] = resultFourier.copy()
+
+      return resultFourier
+
 
    def computeSNormalizationFFT(self, fCtot, lMin=1., lMax=1.e5, test=False, cache=None, sigma=0., u=None):
       '''calculate the normalization for S^2'''
@@ -4576,6 +4966,31 @@ class FlatMap(object):
       f = lambda l: np.exp(lnfln(np.log(l)))
       return f
 
+   def forecastTau(self, fC0, fCtot, lMin=1., lMax=1.e5, test=False):
+      """Interpolates the result for N_L^kappa = f(L),
+      to be used for forecasts on lensing reconstruction
+      """
+      print("computing the reconstruction noise")
+      # Standard reconstruction noise
+      n0S = self.computePatchyNormalizationFFT(fC0=fC0, fCtot=fCtot, lMin=lMin, lMax=lMax, test=test, cache=None)
+      # keep only the real part (the imag. part should be zero, but is tiny in practice)
+      n0S = np.real(n0S)
+      # remove the nans
+      n0S = np.nan_to_num(n0S)
+      # make sure every value is positive
+      n0S = np.abs(n0S)
+      # fix the issue of the wrong ell=0 value
+      # replace it by the value lx=0, ly=fundamental
+      n0S[0,0] = n0S[0,1]
+      
+      # interpolate
+      where = (self.l.flatten()>0.)*(self.l.flatten()<2.*lMax)
+      L = self.l.flatten()[where]
+      N = n0S.flatten()[where]
+      lnfln = interp1d(np.log(L), np.log(N), kind='linear', bounds_error=False, fill_value=np.inf)
+      f = lambda l: np.exp(lnfln(np.log(l)))
+      return f
+
 
 
    def response(self, fC0, fCtot, lMin=1., lMax=1.e5, test=False, cache=None, sigma=0., u=None):
@@ -4629,6 +5044,44 @@ class FlatMap(object):
       nk[0,0] = nk[0,1]
       
       nkPSH = divideArr(nk, (1. - nk*ns*r*r))
+
+      # interpolate
+      where = (self.l.flatten()>0.)*(self.l.flatten()<2.*lMax)
+      L = self.l.flatten()[where]
+      N = nkPSH.flatten()[where]
+      lnfln = interp1d(np.log(L), np.log(N), kind='linear', bounds_error=False, fill_value=np.inf)
+
+      where = lnfln(np.log(L)) < np.inf
+      lmin = float(L[where][0])   
+            
+      f = lambda l: np.exp(lnfln(np.log(np.maximum(l,lmin))))
+      return f
+
+   def forecastTauLensHardened(self, fC0, fCtot, lMin=1., lMax=1.e5, test=False, cache=None):
+      print("computing the response")
+      # Standard reconstruction noise
+      r = self.computeResponseLensPatchyFFT(fC0, fCtot, lMin, lMax, test, cache)
+      ns = self.computePatchyNormalizationFFT(fC0, fCtot, lMin, lMax, test, cache)
+      nphi = self.computeQuadEstPhiNormalizationFFT(fC0, fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache)
+      # keep only the real part (the imag. part should be zero, but is tiny in practice)
+      r = np.real(r)
+      ns = np.real(ns)
+      nphi = np.real(nphi)
+      # remove the nans
+      #r = np.nan_to_num(r)
+      #ns = np.nan_to_num(ns)
+      #nphi = np.nan_to_num(nphi)
+      # make sure every value is positive
+      #r = np.abs(r)
+      ns = np.abs(ns)
+      nphi = np.abs(nphi)
+      # fix the issue of the wrong ell=0 value
+      # replace it by the value lx=0, ly=fundamental
+      r[0,0] = r[0,1]
+      ns[0,0] = ns[0,1]
+      nphi[0,0] = nphi[0,1]
+      
+      nkPSH = divideArr(ns, (1. - nphi*ns*r*r))
 
       # interpolate
       where = (self.l.flatten()>0.)*(self.l.flatten()<2.*lMax)
