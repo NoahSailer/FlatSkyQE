@@ -17,3 +17,5 @@ Checks
 Galactic
 *.npz
 *.txt
+cib_lensing_mocks.ipynb
+ciber_flatskyqe.ipynb
