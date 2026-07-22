@@ -14,7 +14,7 @@ class CMB(object):
    def __init__(self, beam=1., noise=1., nu1=150.e9, nu2=150.e9, lMin=30., lMaxT=3.e3, lMaxP=5.e3, fg=True, atm=False, name=None):
    
       # name
-      self.name = "cmb_beam"+str(round(beam, 3))+"_noise"+str(round(noise, 3))+ "_nu"+str(np.int(nu1/1.e9))+"_nu"+str(np.int(nu2/1.e9))+"_lmin"+str(np.int(lMin))+"_lmaxT"+str(int(lMaxT))+"_lmaxP"+str(int(lMaxP))
+      self.name = "cmb_beam"+str(round(beam, 3))+"_noise"+str(round(noise, 3))+ "_nu"+str(int(nu1/1.e9))+"_nu"+str(int(nu2/1.e9))+"_lmin"+str(int(lMin))+"_lmaxT"+str(int(lMaxT))+"_lmaxP"+str(int(lMaxP))
       if atm:
          self.name += "_atmnoise"
       if name is not None:

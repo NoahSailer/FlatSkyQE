@@ -12,7 +12,7 @@ from copy import copy
 import sys
 
 from astropy.io import fits   # for saving/reeading maps
-import colormaps as cmaps  # for viridis and plasma colormaps
+# import colormaps as cmaps  # for viridis and plasma colormaps
 
 # for faster FFT
 import pyfftw
@@ -21,18 +21,18 @@ pyfftw.interfaces.cache.enable() # so subsequent FFTs use the wisdom from the fi
 ##pyfftw.interfaces.cache.set_keepalive_time(x)
 
 ##################################################################################
-# for pretty plots
+# # for pretty plots
 
-from matplotlib import rc
-rc('font',**{'size':'20','family':'sans-serif','sans-serif':['Computer Modern Sans serif']})
-rc('font',**{'size':'22','family':'serif','serif':['CMU serif']})
-rc('mathtext', **{'fontset':'cm'})
-rc('text', usetex=True)
-rc('text.latex', preamble=r'\usepackage{amsmath}, \usepackage{amssymb}')
-rc('font', size=20)
-rc('legend',**{'fontsize':'18'})
+# from matplotlib import rc
+# rc('font',**{'size':'20','family':'sans-serif','sans-serif':['Computer Modern Sans serif']})
+# rc('font',**{'size':'22','family':'serif','serif':['CMU serif']})
+# rc('mathtext', **{'fontset':'cm'})
+# rc('text', usetex=True)
+# rc('text.latex', preamble=r'\usepackage{amsmath}, \usepackage{amssymb}')
+# rc('font', size=20)
+# rc('legend',**{'fontsize':'18'})
 
-##################################################################################
+# ##################################################################################
 
 #import importlib
 import basic_functions

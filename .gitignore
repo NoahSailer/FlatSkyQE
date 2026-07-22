@@ -8,3 +8,12 @@
 # all output files
 output/
 figures/
+.ipynb_checkpoints/
+mf_output/
+*.ipynb
+*.zip
+OLD
+Checks
+Galactic
+*.npz
+*.txt
