@@ -9,8 +9,8 @@
 output/
 figures/
 .ipynb_checkpoints/
-mf_output/
 *.ipynb
+mf_output/
 *.zip
 OLD
 Checks
