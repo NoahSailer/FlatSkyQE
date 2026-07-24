@@ -389,9 +389,12 @@ def calc_filters_and_corrections(clf, params, cfg):
         if cfg['grab_cib_sim']: # use empirical beam
             def obs_auto(ell):
                 return cib_unlensed_auto(ell) + np.mean(params['clnoise'])/clf.bl(ell)**2
-        else:
-            def obs_auto(ell): # Gaussian beam
+        elif params.get('psf_pix_fwhm') is not None:  # Gaussian beam
+            def obs_auto(ell):
                 return cib_unlensed_auto(ell) + np.mean(params['clnoise'])/gaussian_beam_window(ell, params['psf_pix_fwhm']*params['pixel_size_arcsec'])
+        else:  # No beam (delta functions)
+            def obs_auto(ell):
+                return cib_unlensed_auto(ell) + np.mean(params['clnoise'])
 
     else:
         def obs_auto(ell):
@@ -402,7 +405,8 @@ def calc_filters_and_corrections(clf, params, cfg):
 
     kcorr = compute_beam_correction_num(clf.bl, ell_min=params['lMin'], ell_max=params['lMax'], W_ell=W_ell)
     vbeam = compute_beam_correction_num(clf.bl, ell_min=params['lMin'], ell_max=params['lMax'])
-    modefrac = (params['lMax']**2 - params['lMin']**2)/params['l_nyquist']**2
+    # Bandpass fraction from shear.tex eq. 93: f_band = π(ℓ_max²-ℓ_min²)/(4ℓ_Nyq²)
+    modefrac = (np.pi / 4.0) * (params['lMax']**2 - params['lMin']**2) / params['l_nyquist']**2
 
     print('kcorr is ', kcorr)
     print('vbeam is ', vbeam)

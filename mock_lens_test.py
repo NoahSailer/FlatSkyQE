@@ -1,4 +1,6 @@
 # from FlatSkyQE.diagnostic_qe_components import W_ell
+from tabnanny import verbose
+
 import universe
 import pn_2d
 import flat_map
@@ -33,8 +35,8 @@ from kappa_auto_cross_fns import *
 from bias_modl import *
 from cibmockgen import *
 from map_clus_utils import proc_input_map, compute_map_ps, proc_skewspec, proc_clkg, compute_skew_cl_I2G_simp
-# from kappa_auto_cross_fns import compute_bispectrum_beam_correction_L_dependent
 from forecast_cib_lens import ciber_lens_forecast
+from bias_modl import effective_beam_skew_I2g_correct
 
 class ScaledP2dAuto:
     def __init__(self, original_p2d, alpha):
@@ -55,15 +57,16 @@ class ScaledP2dAuto:
 # def compute_multipole_bins(lMax, nbins=50):
 
 
-def plot_normalization(lC, N_L, N_L_err=None, lMin=None, lMax=None, figsize=(5, 4)):
+def plot_normalization(lC, N_L, N_L_err=None, lMin=None, lMax=None, figsize=(5, 4), show=True, ylim=[1e-11, 1e-6]):
     """
     Plot QE normalization N_L^κ (convergence normalization after L⁴ correction).
     
     Key point: N_L^κ = L⁴/4 × N_L^φ
     After L⁴ correction, N_L^κ should be nearly flat or mildly varying.
-    """
-    plt.figure(figsize=figsize)
-    
+    """   
+
+    fig = plt.figure(figsize=figsize)
+ 
     # Plot N_L^κ (convergence normalization - what actually matters!)
     if N_L_err is not None:
         plt.errorbar(lC, N_L, yerr=N_L_err, fmt='o-', 
@@ -101,100 +104,16 @@ def plot_normalization(lC, N_L, N_L_err=None, lMin=None, lMax=None, figsize=(5, 
     plt.title('QE Convergence Normalization', fontsize=16)
     plt.xscale('log')
     plt.yscale('log')
+    plt.ylim(ylim)
     plt.xlim(1e2, 2e5)
     plt.legend(fontsize=11, loc=2)
     plt.grid(True, alpha=0.3, which='both')
     plt.tight_layout()
-    plt.show()
+    if show:
+        plt.show()
 
-    # if lMax is not None:
-    #     ax1.axvline(lMax, color='red', linestyle='--', alpha=0.5, label=f'lMax = {lMax:.0f}')
-    #     ax1.axvline(0.8*lMax, color='orange', linestyle=':', alpha=0.5, label=f'0.8×lMax')
-    
-    # if lMin is not None:
-    #     ax1.axvline(lMin, color='blue', linestyle='--', alpha=0.5, label=f'lMin = {lMin:.0f}')
-    
-    # ax1.set_xlabel('$L$', fontsize=14)
-    # ax1.set_ylabel('$N_L$', fontsize=14)
-    # ax1.set_title('QE Normalization', fontsize=14)
-    # ax1.set_xscale('log')
-    # ax1.set_yscale('log')
-    # ax1.legend(fontsize=9, loc='best')
-    # ax1.grid(True, alpha=0.3, which='both')
-    
-    # # Right plot: Relative normalization (normalized at L=lMin)
-    # if lMin and np.sum(valid) > 0:
-    #     idx_ref = np.argmin(np.abs(lC_norm - 1.5*lMin))
-    #     N_L_normalized = N_L / N_L[idx_ref]
-        
-    #     ax2.plot(lC_norm, N_L_normalized, 'o-', color='purple', markersize=4, 
-    #             label='$N_L / N_L(1.5 \\times l_{min})$')
-        
-    #     # Compute mode fraction for comparison
-    #     f_mode = compute_mode_loss_factor(lC_norm, lMin, lMax)
-    #     f_mode_normalized = f_mode / f_mode[idx_ref]
-    #     ax2.plot(lC_norm, f_mode_normalized, 's--', color='cyan', markersize=3, alpha=0.7,
-    #             label='Mode fraction $f_{mode}(L)$')
-        
-    #     # Expected scalings for reference
-    #     L_ref = lC_norm / (1.5*lMin)
-    #     ax2.plot(lC_norm, L_ref**(-1), '--', color='green', alpha=0.5, label='$L^{-1}$')
-    #     ax2.plot(lC_norm, L_ref**(-3), '--', color='orange', alpha=0.5, label='$L^{-3}$')
-    #     ax2.plot(lC_norm, L_ref**(-5), '--', color='red', alpha=0.5, label='$L^{-5}$')
-        
-    #     if lMax:
-    #         ax2.axvline(lMax, color='red', linestyle='--', alpha=0.5)
-    #         ax2.axvline(0.8*lMax, color='orange', linestyle=':', alpha=0.5)
-        
-    #     ax2.set_xlabel('$L$', fontsize=14)
-    #     ax2.set_ylabel('Normalized value', fontsize=14)
-    #     ax2.set_title('N_L vs Mode Fraction (normalized)', fontsize=13)
-    #     ax2.set_xscale('log')
-    #     ax2.set_yscale('log')
-    #     ax2.legend(fontsize=8, loc='best')
-    #     ax2.grid(True, alpha=0.3, which='both')
-    #     ax2.text(0.05, 0.95, 'If N_L tracks f_mode,\nthen limited mode overlap\nexplains steep fall-off',
-    #             transform=ax2.transAxes, fontsize=9, verticalalignment='top',
-    #             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
-    
-    # # Third plot: Ratio N_L / f_mode to isolate additional L-dependence
-    # if lMin and np.sum(valid) > 0:
-    #     f_mode = compute_mode_loss_factor(lC_norm, lMin, lMax)
-        
-    #     # Compute ratio to isolate physics beyond geometric coupling
-    #     ratio_N_fmode = N_L / (f_mode + 1e-20)
-        
-    #     ax3.plot(lC_norm, ratio_N_fmode, 'o-', color='darkred', markersize=4,
-    #             label='$N_L / f_{mode}(L)$')
-        
-    #     # Fit to see residual scaling
-    #     valid_ratio = valid & (f_mode > 0.01)  # Only fit where f_mode is significant
-    #     if np.sum(valid_ratio) > 5:
-    #         log_l_ratio = np.log10(lC_norm[valid_ratio])
-    #         log_ratio = np.log10(ratio_N_fmode[valid_ratio])
-    #         slope_residual, intercept_residual = np.polyfit(log_l_ratio, log_ratio, 1)
-    #         fit_ratio = 10**(intercept_residual) * lC_norm**slope_residual
-    #         ax3.plot(lC_norm, fit_ratio, '--', color='gray', linewidth=2, alpha=0.8,
-    #                 label=f'Residual: $\\propto L^{{{slope_residual:.2f}}}$')
-            
-    #         ax3.text(0.05, 0.05, f'If slope ≈ 0: mode coupling explains all\nIf slope < -1: additional physics dominates',
-    #                 transform=ax3.transAxes, fontsize=9, verticalalignment='bottom',
-    #                 bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.3))
-        
-    #     if lMax:
-    #         ax3.axvline(lMax, color='red', linestyle='--', alpha=0.5)
-    #         ax3.axvline(0.8*lMax, color='orange', linestyle=':', alpha=0.5)
-        
-    #     ax3.set_xlabel('$L$', fontsize=14)
-    #     ax3.set_ylabel('$N_L / f_{mode}(L)$', fontsize=14)
-    #     ax3.set_title('Residual L-dependence\n(after mode coupling)', fontsize=13)
-    #     ax3.set_xscale('log')
-    #     ax3.set_yscale('log')
-    #     ax3.legend(fontsize=9, loc='best')
-    #     ax3.grid(True, alpha=0.3, which='both')
-    
-    # plt.tight_layout()
-    # plt.show()
+    return fig
+
 
 
 def plot_normalization_components(L_bins, N_L_fft, N_L_forward, components, lMin=None, lMax=None):
@@ -412,7 +331,7 @@ class mock_lens_dat():
             print("plot kappa map")
             
             kappa *= np.sqrt(scale_clkk)
-            plot_map(kappa, title='kappa, scale_clkk='+str(scale_clkk), figsize=(5, 5))
+            fig = plot_map(kappa, title='kappa, scale_clkk='+str(scale_clkk), figsize=(5, 5), return_fig=True)
             
             kFourier = self.baseMap.fourier(kappa)
             lCen, Cl, sCl = self.baseMap.powerSpectrum(kFourier, theory=[self.p2d_cmblens.fPinterp], plot=False, save=False)
@@ -834,6 +753,16 @@ def compute_mode_loss_factor(L_bins, lMin, lMax, n_grid=1024):
 
 # def calc_filters_and_corrections(clf, params, c_i_shot):
 
+def save_current_plot(fig, tag, sim_idx, save_intermediate_plots=False, intermediate_plot_dir=None):
+    if not save_intermediate_plots:
+        return
+    fpath = os.path.join(intermediate_plot_dir, f"sim{sim_idx:03d}_{tag}.png")
+
+    print('saving to ', fpath)
+    fig.savefig(fpath, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print("Saved intermediate plot:", fpath)
+
 def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024, 
                          N_CIB_PER_PIXEL = 0.2,  # Average 1 source every 20 pixels
                         N_G_PER_PIXEL = 0.2, 
@@ -845,7 +774,20 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
                          lensmode='randomized', ifield=4, n_cib_sim=5, 
                          pixel_fn_correct=False, mockstr='JHlt16_nbar100000.0',
                          use_beam_in_norm=True, skew_filter_mode='bandpass', 
-                         s_max=100.0):
+                         s_max=100.0, verbose=1,
+                         save_intermediate_plots=False,
+                         intermediate_plot_dir=None):
+
+    def vprint(*args, level=1, **kwargs):
+        if verbose >= level:
+            print(*args, **kwargs)
+
+    make_intermediate_plots = bool(save_intermediate_plots)
+    if save_intermediate_plots:
+        if intermediate_plot_dir is None:
+            intermediate_plot_dir = os.path.join("res", "intermediate_plots")
+        os.makedirs(intermediate_plot_dir, exist_ok=True)
+
     
     rng = np.random.default_rng(seed=123) # Use same seed for consistency
 
@@ -856,7 +798,8 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
     config_dict = dict({'lensmode':lensmode, 'add_noise':add_noise, 
                         'grab_cib_sim':grab_cib_sim, 'pixel_fn_correct':pixel_fn_correct, 
                         'apply_mask':apply_mask, 'mode':'qe_kappa_norm', 'cut_lxly':False,
-                        'skew_filter_mode':skew_filter_mode})  # 'bandpass' or 'wiener'
+                        'skew_filter_mode':skew_filter_mode,
+                        'verbose': verbose})  # 'bandpass' or 'wiener'
 
     clf = ciber_lens_forecast(ell_min=1, ell_max=2.*lMax)
     
@@ -865,9 +808,9 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
             N_L_kappa, N_L_err_kappa = [np.zeros((nsim, 50)) for _ in range(9)]
     
     param_dict['pixel_size_arcsec'] = 3600.*(sizeX/MAP_SIZE)
-    print('pixel size:', param_dict['pixel_size_arcsec'])
+    vprint('pixel size:', param_dict['pixel_size_arcsec'])
     param_dict['l_nyquist'] = np.pi / (param_dict['pixel_size_arcsec'] / 206265.0)
-    print('ell Nyquist:', param_dict['l_nyquist'])
+    vprint('ell Nyquist:', param_dict['l_nyquist'])
 
     if param_dict['psf_pix_fwhm'] is not None:
         param_dict['sigma_b'] = psf_pix_fwhm_to_sigma_rad(param_dict['pixel_size_arcsec'], param_dict['psf_pix_fwhm'])
@@ -882,7 +825,9 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
         clf.bl = lambda ell: np.ones_like(ell)  # Unity beam
 
     for x in range(nsim):
-        
+
+        vprint(f"\n--- [sim {x+1}/{nsim}] starting ---", level=1)
+
         simidx = x % n_cib_sim
         if grab_cib_sim:
             tmdir = '../data/lens_prods/mock_dat/'+datestr+'/TM'+str(ciber_inst)
@@ -890,7 +835,7 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
         else:
             mock_sim_fpath = None
 
-        print('loading from ', mock_sim_fpath)
+        vprint('[sim %d] loading from ' % x, mock_sim_fpath)
         # This map represents the true sky intensity I(x, y)
         cib_intensity_map, all_cib_fluxes, counts_map, mask = generate_cib_map(
             map_size=MAP_SIZE,
@@ -898,7 +843,8 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
             seed=None, s_max=s_max,
         mock_sim_fpath=mock_sim_fpath, apply_mask=apply_mask)
 
-        print('mean mask is ', np.mean(mask))
+        vprint(f'[sim {x}] generated CIB map: {len(all_cib_fluxes)} sources')
+        vprint('mean mask is ', np.mean(mask))
         unmask_frac = np.mean(mask)
 
         cib_smooth = cib_intensity_map.copy()
@@ -910,8 +856,9 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
             if psf_pix_fwhm > 0:
                 cib_smooth = gaussian_filter(cib_intensity_map, sigma=psf_pix_fwhm/2.355)
         
-        if x==0 and plot:
-            plot_map(cib_smooth, figsize=(5, 5), title='CIB map')
+        if x==0 and make_intermediate_plots:
+            fig = plot_map(cib_smooth, figsize=(5, 5), title='CIB map', show=False, return_fig=True)
+            save_current_plot(fig, "cib_map", x, save_intermediate_plots=save_intermediate_plots, intermediate_plot_dir=intermediate_plot_dir)
 
         
         if grab_cib_sim:
@@ -927,6 +874,7 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
             galaxy_fluxes = all_cib_fluxes[galaxy_indices]
 
 
+        vprint(f'[sim {x}] computing analytic bias terms')
         # --- 4. Calculate the Analytic Bias ---
         analytic_bias, c_i_shot, c_i2_g_shot, galshot, trispec_noise_cib, trispec_noise_g = calculate_analytic_bias(
             n_cib_per_pixel=N_CIB_PER_PIXEL,
@@ -943,18 +891,20 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
         param_dict['trispec_noise_g'] = trispec_noise_g
         param_dict['analytic_bias'] = analytic_bias
 
-        print('cI shot, cI2 shot, galshot, analytic bias:', c_i_shot, c_i2_g_shot, galshot, analytic_bias)
+        vprint('cI shot, cI2 shot, galshot, analytic bias:', c_i_shot, c_i2_g_shot, galshot, analytic_bias)
         path_k = 'example_kappa.npz'
         # mask = np.ones_like(cib_intensity_map)    
         
 
         if add_noise:
+            vprint(f'[sim {x}] adding noise, sigma_noise_pix={sigma_noise_pix}')
             noise = np.random.normal(0, sigma_noise_pix, cib_intensity_map.shape)
-            if plot:
-                plot_map(noise, figsize=(5, 5), title='noise')
+            if make_intermediate_plots:
+                fig = plot_map(noise, figsize=(5, 5), title='noise', show=False, return_fig=True)
+                save_current_plot(fig, "noise", x, save_intermediate_plots=save_intermediate_plots, intermediate_plot_dir=intermediate_plot_dir)
             
             lb, clnoise, clerrnose = get_power_spec(noise, nbins=26)
-            print('mean nell:', np.mean(clnoise))
+            vprint('mean nell:', np.mean(clnoise))
             obs_map = cib_smooth + noise
             param_dict['clnoise'] = clnoise
             
@@ -962,11 +912,14 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
             obs_map = cib_smooth*np.ones_like(cib_smooth)
 
         if apply_mask:
+            vprint(f'[sim {x}] applying mask')
             obs_map *= mask
             obs_map[obs_map != 0] -= np.mean(obs_map[obs_map != 0])
-            if plot:
-                plot_map(obs_map, figsize=(6, 6), title='masked map mean sub')
+            if make_intermediate_plots:
+                fig = plot_map(obs_map, figsize=(6, 6), title='masked map mean sub', show=False, return_fig=True)
+                save_current_plot(fig, "masked_obs", x, save_intermediate_plots=save_intermediate_plots, intermediate_plot_dir=intermediate_plot_dir)
 
+        vprint(f'[sim {x}] computing filters and corrections')
         fns, facs = calc_filters_and_corrections(clf, param_dict, config_dict)
 
         # Extract filter functions
@@ -979,11 +932,11 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
         
         # Use kcorr for beam correction (not in normalization)
 
-        print('kcorr is ', facs['kcorr'])
-        print('vbeam is ', facs['vbeam'])
-        print('mode frac is ', facs['modefrac'])
+        vprint('kcorr is ', facs['kcorr'])
+        vprint('vbeam is ', facs['vbeam'])
+        vprint('mode frac is ', facs['modefrac'])
 
-        print('obs map has mean:', np.mean(obs_map))
+        vprint('obs map has mean:', np.mean(obs_map))
         dataFourier = baseMap.fourier(obs_map)
 
         # if pixel_fn_correct:
@@ -991,8 +944,8 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
 
         ell_pl = np.logspace(1, 5, 100)
         
-        if plot:
-            plt.figure(figsize=(5, 4))
+        if make_intermediate_plots:
+            fig = plt.figure(figsize=(5, 4))
             plt.plot(ell_pl, cib_unlensed_auto(ell_pl), label='unlensed')
             plt.plot(ell_pl, obs_auto(ell_pl), label='obs')
             plt.plot(ell_pl, obs_auto(ell_pl)-cib_unlensed_auto(ell_pl), label='difference', linestyle='dashed', color='k')
@@ -1001,7 +954,10 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
             plt.xlabel('$\\ell$', fontsize=14)
             plt.ylabel('$C_{\\ell}$', fontsize=14)
             plt.legend()
-            plt.show()
+            save_current_plot(fig, "cl_components", x, save_intermediate_plots=save_intermediate_plots, intermediate_plot_dir=intermediate_plot_dir)
+            plt.close()
+            # if plot:
+            #     plt.show()
 
         # Beam correction strategy: 
         # OLD WAY (use_beam_in_norm=False): b_ell_use=None, use external kcorr/vbeam corrections
@@ -1009,13 +965,13 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
         if use_beam_in_norm:
             b_ell_use = B_ell_fn  # Pass beam to QE normalization (gives B(ell)×B(L-ell))
             kcorr_use = 1.0  # No additional beam correction needed
-            print("Using beam in normalization (proper B(ell)×B(L-ell) correction)")
-            print("  -> Setting kcorr=1.0 (no additional correction)")
+            vprint("Using beam in normalization (proper B(ell)×B(L-ell) correction)")
+            vprint("  -> Setting kcorr=1.0 (no additional correction)")
         else:
             b_ell_use = None  # Use external kcorr/vbeam corrections
             kcorr_use = facs['kcorr']  # Apply beam correction in post-processing
-            print("Using old method with external kcorr/vbeam corrections")
-            print(f"  -> Using kcorr={kcorr_use:.6f}")
+            vprint("Using old method with external kcorr/vbeam corrections")
+            vprint(f"  -> Using kcorr={kcorr_use:.6f}")
             
         # Organize into dictionaries for cleaner function calls
         map_dict = dict({'counts_map':counts_map, 'mask':mask, 'cib_intensity_map':cib_intensity_map, 
@@ -1027,13 +983,18 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
         corr_facs = dict({'kcorr':kcorr_use, 'vbeam':facs['vbeam'], 
                          'unmask_frac':unmask_frac, 'modefrac':facs['modefrac']})
 
-        psres = compute_lensing_ps_quantities_v2(baseMap, map_dict, cl_fns, param_dict, 
-                                                config_dict, corr_facs)
+        vprint(f'[sim {x}] computing lensing power spectrum quantities')
+        psres = compute_lensing_ps_quantities_v2(baseMap, map_dict, cl_fns, param_dict,
+                                                config_dict, corr_facs,
+                                                save_intermediate_plots=save_intermediate_plots,
+                                                intermediate_plot_dir=intermediate_plot_dir)
+        vprint(f'[sim {x}] done computing power spectra')
 
         # Plot QE normalization N_L for diagnostics
-        if plot and psres['N_L'] is not None:
-            plot_normalization(psres['lC'], psres['N_L'], psres['N_L_err'], 
-                             lMin=param_dict['lMin'], lMax=param_dict['lMax'])
+        if make_intermediate_plots and psres['N_L'] is not None:
+            fig = plot_normalization(psres['lC'], psres['N_L'], psres['N_L_err'],
+                             lMin=param_dict['lMin'], lMax=param_dict['lMax'], show=False)
+            save_current_plot(fig, "qe_normalization", x, save_intermediate_plots=save_intermediate_plots, intermediate_plot_dir=intermediate_plot_dir)
 
         clgg[x] = psres['clgg']
         clII[x] = psres['clII']    
@@ -1099,16 +1060,17 @@ def compute_normalization(baseMap, lC, norm_Fourier):
 
     return N_L, N_L_err
 
-def compute_lensing_ps_quantities_v2(baseMap, map_dict, cl_fns, param_dict, config_dict, corr_facs):
+def compute_lensing_ps_quantities_v2(baseMap, map_dict, cl_fns, param_dict, config_dict, corr_facs,
+                                     save_intermediate_plots=False, intermediate_plot_dir=None):
     """
     Compute lensing power spectrum quantities using dictionary-based inputs.
-    
+
     Parameters:
     -----------
     baseMap : FlatMap
         The flat map object
     map_dict : dict
-        Dictionary containing maps: 'obs_map', 'counts_map', 'mask', 'cib_intensity_map', 
+        Dictionary containing maps: 'obs_map', 'counts_map', 'mask', 'cib_intensity_map',
         'kappa_true', 'cibFourier' (optional)
     cl_fns : dict
         Dictionary containing functions: 'cib_unlensed_auto', 'obs_auto', 'W_ell', 'B_ell'
@@ -1118,6 +1080,10 @@ def compute_lensing_ps_quantities_v2(baseMap, map_dict, cl_fns, param_dict, conf
         Dictionary with configuration: 'apply_mask', 'cut_lxly', 'mode'
     corr_facs : dict
         Dictionary with correction factors: 'kcorr', 'vbeam', 'unmask_frac'
+    save_intermediate_plots : bool
+        Whether to save intermediate diagnostic plots
+    intermediate_plot_dir : str
+        Directory for saving plots
     """
     
     path_k = 'example_kappa.npz'
@@ -1286,13 +1252,16 @@ def compute_lensing_ps_quantities_v2(baseMap, map_dict, cl_fns, param_dict, conf
     # CRITICAL: W_ell weighting in vbeam MUST match the filtering mode used in bispectrum!
 
     print('Computing L-dependent bispectrum beam correction...')
-    
+
     if skew_filter_mode == 'bandpass':
-        # Simple bandpass: no Wiener weighting, just geometric mode availability
-        vbeam_L = compute_bispectrum_beam_correction_L_dependent(
-            lC, B_ell_for_bis, param_dict['lMin'], param_dict['lMax'], 
-            W_ell=None  # Hard bandpass
+        # Simple bandpass: compute mode-overlap integral over ell ∈ [lMin, lMax]
+        # using corrected function that properly implements f_Θ(L)
+        vbeam_L = effective_beam_skew_I2g_correct(
+            lC, param_dict['lMin'], param_dict['lMax'],
+            B_ell_fn=B_ell_for_bis, W_ell_fn=None
         )
+
+
     elif skew_filter_mode == 'wiener':
         # Wiener filter: both I(ell) and I(L-ell) are weighted by W(ell)
         # So the bispectrum has effective weight W(ell) × W(L-ell)
@@ -1302,15 +1271,15 @@ def compute_lensing_ps_quantities_v2(baseMap, map_dict, cl_fns, param_dict, conf
         if W_ell_fn is not None:
             def W_ell_sq(ell):
                 return W_ell_fn(ell)**2
-            vbeam_L = compute_bispectrum_beam_correction_L_dependent(
-                lC, B_ell_for_bis, param_dict['lMin'], param_dict['lMax'], 
-                W_ell=W_ell_sq
+            vbeam_L = effective_beam_skew_I2g_correct(
+                lC, param_dict['lMin'], param_dict['lMax'],
+                flat_sky=True, B_ell_fn=B_ell_for_bis, W_ell_fn=W_ell_sq
             )
         else:
             print("  WARNING: W_ell not available, using no weighting")
-            vbeam_L = compute_bispectrum_beam_correction_L_dependent(
-                lC, B_ell_for_bis, param_dict['lMin'], param_dict['lMax'], 
-                W_ell=None
+            vbeam_L = effective_beam_skew_I2g_correct(
+                lC, param_dict['lMin'], param_dict['lMax'],
+                flat_sky=True, B_ell_fn=B_ell_for_bis, W_ell_fn=None
             )
 
     # Apply mode fraction to L-dependent array
@@ -1336,16 +1305,60 @@ def compute_lensing_ps_quantities_v2(baseMap, map_dict, cl_fns, param_dict, conf
                                    unmask_frac=corr_facs['unmask_frac'])
     
     # Note: No beam correction applied to clkg since QE estimator is beam-independent
-    clkg, clkgerr = proc_clkg(lC, clkg, clkgerr, B_ell=None, 
+    clkg, clkgerr = proc_clkg(lC, clkg, clkgerr, B_ell=None,
                              kcorr=corr_facs['kcorr'], unmask_frac=corr_facs['unmask_frac'])
+
+    # DEBUG: Plot L-dependent corrections to skew spectrum
+    if save_intermediate_plots:
+        fig, ax = plt.subplots(figsize=(5, 4))
+
+        # Plot 1: vbeam_L before and after modefrac
+        ax.loglog(lC, vbeam_L, label='vbeam_L (before modefrac)', marker='o', markersize=3, alpha=0.7)
+        ax.axhline(corr_facs['modefrac'], color='r', linestyle='--', label=f'modefrac={corr_facs["modefrac"]:.6f}')
+        ax.loglog(lC, vbeam_L_corrected, label='vbeam_L_corrected', marker='s', markersize=3, alpha=0.7)
+        ax.set_xlabel('L')
+        ax.set_ylabel('Correction factor')
+        ax.legend()
+        ax.set_title('L-dependent mode-overlap and modefrac correction')
+        ax.grid(alpha=0.3)
+
+
+        plt.tight_layout()
+        save_current_plot(fig, "skew_corrections_diagnostic", 0, save_intermediate_plots=save_intermediate_plots,
+                         intermediate_plot_dir=intermediate_plot_dir)
+
+    # Create dedicated vbeam(L) figure showing mode-overlap fraction
+    if save_intermediate_plots:
+        fig = plt.figure(figsize=(10, 7))
+
+        # Main panel: f_Θ(L) with reference annotations
+        ax = plt.gca()
+        ax.semilogx(lC, vbeam_L, label='$f_\\Theta(L)$ (mode-overlap fraction)',
+                   marker='o', markersize=5, alpha=0.85, linewidth=2.5, color='darkblue')
+        ax.axhline(1.0, color='k', linestyle='--', alpha=0.3, linewidth=1.5, label='No geometric constraint')
+        ax.axvline(param_dict['lMin'], color='green', linestyle=':', alpha=0.5, linewidth=2, label=f'$\\ell_{{\\min}}$ = {param_dict["lMin"]:.0f}')
+        ax.axvline(param_dict['lMax'], color='red', linestyle=':', alpha=0.5, linewidth=2, label=f'$\\ell_{{\\max}}$ = {param_dict["lMax"]:.0f}')
+
+        ax.set_xlabel('Large-scale multipole $L$', fontsize=14, fontweight='bold')
+        ax.set_ylabel('$f_\\Theta(L)$', fontsize=14, fontweight='bold')
+        ax.set_title('Mode-overlap fraction for bispectrum (shear.tex eq. 96-105)', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3, which='both')
+        ax.set_ylim([0, 1.05])
+        ax.legend(fontsize=11, loc='best')
+
+        # Add text box with explanation
+        plt.tight_layout()
+        save_current_plot(fig, "vbeam_L_mode_overlap", 0, save_intermediate_plots=save_intermediate_plots,
+                         intermediate_plot_dir=intermediate_plot_dir)
 
     # Calculate shot noise level and bias using BEAM-CORRECTED spectra
     # Both clII and cl_bis are now beam-deconvolved
     clII_shot = np.mean(clII[(lC > param_dict['lMin']) * (lC < param_dict['lMax'])])
     print('clII shot:', clII_shot)
 
-    # Bias formula: ΔC = C^{I²g} × A / (2 × C^{II})
-    # Both terms are now beam-free, so ratio is correct
+    # Bias formula: ΔC_L = C_L^{I²g} × A / (2 × C^{II})
+    # Theory uses SCALAR bandpass-averaged C^{II}, NOT L-dependent spectrum
+    # Both clII_shot and cl_bis are now beam-free, so ratio is correct
     clkg_bias = cl_bis * param_dict['Apix'] / (2 * clII_shot)
 
     # Apply mask correction to galaxy power spectrum
@@ -1408,7 +1421,10 @@ def run_lens_recover(inst, nsim=5, scale_clkk=1.0, ifield_list=[4, 6, 7, 8], moc
             plt.xlim(300, 1e5)
             plt.ylim(1e-3, 1e4)
 
-            plt.show()
+            if plot:
+                plt.show()
+            else:
+                plt.close()
 
             # Organize into dictionaries for v2 function
             map_dict = dict({'counts_map':ld.galcounts, 'mask':ld.mask, 'cib_intensity_map':ld.ciber_map,
@@ -1428,7 +1444,9 @@ def run_lens_recover(inst, nsim=5, scale_clkk=1.0, ifield_list=[4, 6, 7, 8], moc
                             'unmask_frac':unmask_frac, 'modefrac':facs['modefrac']})
 
             psres = compute_lensing_ps_quantities_v2(baseMap, map_dict, cl_fns, param_dict,
-                                                    config_dict, corr_facs)
+                                                    config_dict, corr_facs,
+                                                    save_intermediate_plots=False,
+                                                    intermediate_plot_dir=None)
 
             all_clx[simidx, fieldidx] = psres['clx']
             all_clxerr[simidx, fieldidx] = psres['clxerr']
@@ -1482,14 +1500,19 @@ def run_lens_recover(inst, nsim=5, scale_clkk=1.0, ifield_list=[4, 6, 7, 8], moc
             
 
             if plot:
-                plot_map(psres['kappa_est_map'], figsize=(5, 5), title='kappa (estimated)')
-                plot_map(psres['galdens'], figsize=(5, 5), title='galdens')
-                plot_map(ld.ciber_map, figsize=(5, 5), title='ciber map')
+                fig_kappa = plot_map(psres['kappa_est_map'], figsize=(5, 5), title='kappa (estimated)', return_fig=True)
+                fig_galdens = plot_map(psres['galdens'], figsize=(5, 5), title='galdens', return_fig=True)
+                fig_ciber_map = plot_map(ld.ciber_map, figsize=(5, 5), title='ciber map', return_fig=True)
+
+                save_current_plot(fig_kappa, "kappa_est_map_simidx"+str(simidx)+"_ifield"+str(fieldidx))
+                save_current_plot(fig_galdens, "galdens_map_simidx"+str(simidx)+"_ifield"+str(fieldidx))
+                save_current_plot(fig_ciber_map, "ciber_map_simidx"+str(simidx)+"_ifield"+str(fieldidx))
 
             # Plot QE normalization N_L for diagnostics
             if psres['N_L'] is not None:
-                plot_normalization(psres['lC'], psres['N_L'], psres['N_L_err'], 
+                fig_nl = plot_normalization(psres['lC'], psres['N_L'], psres['N_L_err'], 
                                  lMin=param_dict['lMin'], lMax=param_dict['lMax'])
+                save_current_plot(fig_nl, "N_L_normalization_simidx"+str(simidx)+"_ifield"+str(fieldidx))
 
             plot_clx_clkk_clkg(psres['lC'], psres['clx'], psres['clkk'], psres['clkg'], psres['clxerr'], psres['clkkerr'], psres['clkgerr'])
 

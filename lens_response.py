@@ -313,7 +313,7 @@ def fit_smooth_spectrum(lb, cl, model='powerlaw_plus_shot', n_components=1,
 
 
 def load_ciber_f25_spectrum(inst=1, basepath=None, smooth=False,
-                            smooth_model='powerlaw_plus_shot', **smooth_kwargs):
+                            smooth_model='powerlaw_plus_shot', fpath=None, **smooth_kwargs):
     """
     Load the CIBER F25B field-averaged auto power spectrum for TM1 (J, inst=1)
     or TM2 (H, inst=2).  Returns a callable cell_interp(ell) and the raw arrays.
@@ -344,7 +344,11 @@ def load_ciber_f25_spectrum(inst=1, basepath=None, smooth=False,
     if basepath is None:
         basepath = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 '..', 'data')
-    fname = os.path.join(basepath, f'ciber_auto_{band}lt16.0_F25B.npz')
+    if fpath is not None:
+        fname = fpath
+    else:
+        fname = f'../data/feder25_ciber_spitzer/ciber_auto_{band}lt16.0_F25B.npz'
+
     d  = np.load(fname)
     lb = d['lb']
     cl = d['fieldav_cl']
@@ -708,6 +712,8 @@ def plot_snr_integrand(
     ell_arr = np.geomspace(ellmin, ellmax, Nell)
     colors  = plt.cm.plasma(np.linspace(0.15, 0.80, len(L_values)))
 
+    print('C_L is ', C_L)
+
     fig, ax = plt.subplots(figsize=(7, 4))
 
     for L, col in zip(L_values, colors):
@@ -750,28 +756,35 @@ def plot_snr_integrand(
     plt.tight_layout()
     return fig
 
-def compute_snr_integrand(ell_arr, L, A, B, n, Ntheta, Nphi, cell_interp, exact_response):
+
+def snr_from_fisher(ell_arr, dF, dF_total, C_L, N_tris):
+    """
+    Compute the SNR integrand d[SNR^2]/d(ln ell) from the Fisher integrand dF.
+    """
+
+    dlnell = np.gradient(np.log(ell_arr))
+    # dlnell = np.gradient(np.log(dF_total))
+    I_cum  = np.cumsum(dF_total * dlnell)
+    snr_integrand = C_L * dF / (1.0 + N_tris * I_cum)**2
+    return snr_integrand
+
+def compute_snr_integrand(ell_arr, L, C_L,  A, B, n, Ntheta, Nphi, cell_interp, exact_response, N_tris=None):
+    if N_tris is None:
+        N_tris = [0.]
     if exact_response:
         dF_total = fisher_integrands_full2d_exact(
             ell_arr, L=L, A=A, B=B, n=n, Ntheta=Ntheta, Nphi=Nphi,
-            cell_interp=cell_interp
+            cell_interp=cell_interp, N_tris=N_tris,
         )
-        dlnell = np.gradient(np.log(ell_arr))
-        I_cum  = np.cumsum(dF_total * dlnell)
-        w      = C_L / (1.0 + N_tris * I_cum)**2
-        snr_total = w * dF_total
+        snr_total = snr_from_fisher(ell_arr, dF_total, dF_total, C_L, N_tris)
         return snr_total
     else:
         dF_iso, dF_quad, dF_cross = fisher_integrands_full2d(
-            ell_arr, L=L, A=A, B=B, n=n, Ntheta=Ntheta, cell_interp=cell_interp
+            ell_arr, L=L, A=A, B=B, n=n, Ntheta=Ntheta, cell_interp=cell_interp,
         )
-        g_tot  = dF_iso + dF_quad + dF_cross
-        dlnell = np.gradient(np.log(ell_arr))
-        I_cum  = np.cumsum(g_tot * dlnell)
-        w      = C_L / (1.0 + N_tris * I_cum)**2
-
-        snr_quad = w * dF_quad
-        snr_iso  = w * dF_iso
+        dF_total  = dF_iso + dF_quad + dF_cross
+        snr_quad = [snr_from_fisher(ell_arr, dF_quad, dF_total, C_L, N_tris_indiv) for N_tris_indiv in N_tris]
+        snr_iso  = [snr_from_fisher(ell_arr, dF_iso, dF_total, C_L, N_tris_indiv) for N_tris_indiv in N_tris]
 
         return snr_quad, snr_iso
 
@@ -788,7 +801,7 @@ def plot_snr_shear_vs_mag(
     N_tris=1e-9,
     C_L=1.0,
     show_squeezed=True,
-    figsize=(5, 3.5),
+    figsize=(6, 5),
     cell_interp=None,
     exact_response=False,
     Nphi=100,
@@ -796,7 +809,7 @@ def plot_snr_shear_vs_mag(
     bbox_anchor=(0., 1.0),
     legend_fs=10,
     textypos=1e8,
-    show_mag_no_nltris=False,
+    lab_fs=14,
 ):
     """
     Single plot of d[SNR(phi_L)^2]/d(ln ell) split into shear and magnification,
@@ -824,59 +837,61 @@ def plot_snr_shear_vs_mag(
     fig, ax = plt.subplots(figsize=figsize)
     colors = plt.cm.plasma(np.linspace(0.15, 0.80, len(L_values)))
 
-    ax.text(350, textypos, '$N_{L}^{\\rm tris} = $'+str(N_tris), fontsize=14)
+    # ax.text(350, textypos, '$N_{L}^{\\rm tris} = $'+str(N_tris), fontsize=14)
+
+    # for logy in [5, 6, 7, 8, 9, 10]:
+        # ax.axhline(10**logy, lw=0.7, ls="solid", alpha=0.2, color='k')
 
     for i, (L, col) in enumerate(zip(L_values, colors)):
         # Only use ell >= L
         ell_arr = np.geomspace(max(ellmin, L), ellmax, Nell)
 
-        snr_total = compute_snr_integrand(ell_arr, L, A, B, n, Ntheta, Nphi, cell_interp, exact_response)
+        # ax.axvline(L, color='k', lw=1.5, ls="solid", alpha=0.45)
+
+        snr_total = compute_snr_integrand(ell_arr, L, C_L, A, B, n, Ntheta, Nphi, cell_interp, exact_response, N_tris=N_tris)
+        lbl = rf"$(L={L})$"
 
         # --- Full 2D integrands ---
         if exact_response: 
 
-            snr_total = compute_snr_integrand(ell_arr, L, A, B, n, Ntheta, Nphi, cell_interp, exact_response)
+            # Use fully angle-resolved response (no exact zeros)
 
-            # # Use fully angle-resolved response (no exact zeros)
-            # dF_total = fisher_integrands_full2d_exact(
-            #     ell_arr, L=L, A=A, B=B, n=n, Ntheta=Ntheta, Nphi=Nphi,
-            #     cell_interp=cell_interp
-            # )
-            # # For exact response, we don't split shear/mag cleanly, plot total only
-            # dlnell = np.gradient(np.log(ell_arr))
-            # I_cum  = np.cumsum(dF_total * dlnell)
-            # w      = C_L / (1.0 + N_tris * I_cum)**2
-            # snr_total = w * dF_total
-            
-            lbl = rf"$L={L}$"
+            snr_total = compute_snr_integrand(ell_arr, L, C_L, A, B, n, Ntheta, Nphi, cell_interp, exact_response, N_tris=N_tris)
+
             ax.plot(ell_arr, snr_total, color=col, ls="-", lw=1.8, label=lbl)
         else:
+            # Original: 1D response amplitudes (can have exact zeros)
 
-            snr_quad, snr_iso = compute_snr_integrand(ell_arr, L, A, B, n, Ntheta, Nphi, cell_interp, exact_response)
+            snr_quad, snr_iso = compute_snr_integrand(ell_arr, L, C_L, A, B, n, Ntheta, Nphi, cell_interp, exact_response, N_tris=N_tris)
 
-            # # Original: 1D response amplitudes (can have exact zeros)
-            # dF_iso, dF_quad, dF_cross = fisher_integrands_full2d(
-            #     ell_arr, L=L, A=A, B=B, n=n, Ntheta=Ntheta, cell_interp=cell_interp
-            # )
-            # g_tot  = dF_iso + dF_quad + dF_cross
-            # dlnell = np.gradient(np.log(ell_arr))
-            # I_cum  = np.cumsum(g_tot * dlnell)
-            # w      = C_L / (1.0 + N_tris * I_cum)**2
+            # Determine colors based on L value (varying shades of blue and red)
+            blue_color = plt.cm.Blues(0.4 + 0.4 * (i / max(len(L_values)-1, 1)))
+            red_color = plt.cm.Reds(0.4 + 0.4 * (i / max(len(L_values)-1, 1)))
+            
+            # Plot shear (snr_quad) cases in blue with solid lines
 
-            # snr_quad = w * dF_quad
-            # snr_iso  = w * dF_iso
+            linestyles = ['-', '--', '-.', ':']
 
-            lbl = rf"$L={L}$"
-            ax.plot(ell_arr, snr_quad, color=col, ls="-",  lw=1.8,
-                    label=rf"shear {lbl}" if i == 0 else lbl)
-            ax.plot(ell_arr, snr_iso,  color=col, ls="--", lw=1.8,
-                    label=rf"mag {lbl}"   if i == 0 else None)
+
+            for j, snr_quad_case in enumerate(snr_quad):
+                ls = linestyles[j % len(linestyles)]
+
+                label = rf"Shear {lbl}" if j == 0 else None
+                ax.plot(ell_arr, snr_quad_case, color=blue_color, ls=ls, lw=1.8, label=label)
+            
+            # Plot magnification (snr_iso) cases in red with different line styles for each N_tris case
+            for j, snr_iso_case in enumerate(snr_iso):
+                ls = linestyles[j % len(linestyles)]
+                label = rf"Magnification {lbl}" if j == 0 else None
+                ax.plot(ell_arr, snr_iso_case, color=red_color, ls=ls, lw=1.8, label=label)
 
         # --- Squeezed-limit overlay ---
         if show_squeezed and not exact_response:
             dFiso_sq, dFquad_sq = fisher_integrands(ell_arr, L=L, A=A, B=B, n=n,
                                                     cell_interp=cell_interp)
             g_sq = dFiso_sq + dFquad_sq
+
+            dlnell = np.gradient(np.log(ell_arr))
             I_sq = np.cumsum(g_sq * dlnell)
             w_sq = C_L / (1.0 + N_tris * I_sq)**2
             ax.plot(ell_arr, w_sq * dFquad_sq, color="0.65", ls="-",  lw=0.9,
@@ -886,13 +901,13 @@ def plot_snr_shear_vs_mag(
 
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel(r"$\ell$", fontsize=14)
-    ax.set_ylabel(r"$d[\mathrm{SNR}(\phi_L)^2]/d\ln\ell$", fontsize=14)
+    ax.set_xlabel(r"$\ell$", fontsize=lab_fs)
+    ax.set_ylabel(r"$d[\mathrm{SNR}(\phi_L)^2]/d\ln\ell$", fontsize=lab_fs)
     ax.grid(alpha=0.3)
     ax.legend(fontsize=legend_fs, ncol=2, loc=2, bbox_to_anchor=bbox_anchor)
     if ylim is not None:
         ax.set_ylim(ylim)
-    plt.tight_layout()
+    # plt.tight_layout()
     return fig
 
 
@@ -1132,4 +1147,273 @@ def plot_shear_vs_mag_vs_ellmax(
 
 #     plt.tight_layout()
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Three-panel plot: Shear SNR | Magnification SNR | Fractional Fisher vs ell_max
+# ---------------------------------------------------------------------------
+
+def plot_snr_shear_mag_fisher_threepanel(
+    L_values,
+    ellmin,
+    ellmax,
+    ellmax_arr=None,
+    A=None,
+    B=None,
+    n=None,
+    Nell=300,
+    Ntheta=400,
+    N_tris=1e-9,
+    C_L=1.0,
+    show_squeezed=True,
+    figsize=(16, 5),
+    cell_interp=None,
+    exact_response=False,
+    Nphi=100,
+    ylim_snr=None,
+    legend_fs=13,
+    lab_fs=16,
+    plot_xmin=2000,
+    shear_lmax=4e4,
+    mag_lmin = 2000,
+    textxpos=1.5e4, 
+    textypos=1e9
+):
+    """
+    Three-panel plot showing shear/magnification SNR integrands and magnification fraction vs ell_max.
+
+    Parameters
+    ----------
+    L_values : list of floats
+        Large-scale multipoles to plot.
+    A, B, n : float
+        Power spectrum parameters: C_ell = A + B * ell^n (used for Fisher panel if cell_interp not provided).
+    ellmin, ellmax : float
+        Multipole range for SNR panels.
+    ellmax_arr : 1-D array, optional
+        Upper integration limits for magnification fraction panel. Default: np.geomspace(ellmin, ellmax, 50).
+    Nell : int
+        Number of grid points per evaluation.
+    Ntheta : int
+        Number of angular samples for 2D Fisher computation.
+    N_tris : float or list
+        Trispectrum noise level(s) for SNR suppression.
+    C_L : float
+        Lensing potential power spectrum normalization.
+    cell_interp : callable, optional
+        Interpolated power spectrum C(ell). If provided, overrides A, B, n for Fisher panel.
+    exact_response : bool
+        Use exact 2D response (slower, no exact zeros).
+    Nphi : int
+        Azimuthal samples for exact response.
+    ylim_snr : tuple, optional
+        y-limits for SNR panels.
+    legend_fs, lab_fs : int
+        Font sizes.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        Two-panel SNR figure
+    fig_fraction : matplotlib.figure.Figure
+        Magnification fraction vs ell_max figure
+    fig_cumul : matplotlib.figure.Figure
+        Cumulative Fisher information figure
+    """
+    if ellmax_arr is None:
+        ellmax_arr = np.geomspace(ellmin, ellmax, 50)
+
+    # Determine N_tris values to iterate over
+    if isinstance(N_tris, list):
+        N_tris_list = N_tris
+    else:
+        N_tris_list = [N_tris]
+
+    # Pre-compute SNR integrands for all L values and N_tris variations
+    # Dictionary: snr_data[(L, n_idx)] = {'ell_arr': ..., 'snr_quad': [...], 'snr_iso': [...]}
+    snr_data = {}
+    colors = plt.cm.plasma(np.linspace(0.15, 0.80, len(L_values)))
+    linestyles = ['-', '--', '-.', ':']
+
+    ell_arr_full = np.geomspace(max(ellmin, min(L_values)), ellmax, Nell)
+
+    for i, L in enumerate(L_values):
+        ell_arr = np.geomspace(max(ellmin, L), ellmax, Nell)
+        snr_quad, snr_iso = compute_snr_integrand(
+            ell_arr, L, C_L, A, B, n, Ntheta, Nphi, cell_interp, exact_response, N_tris=N_tris_list
+        )
+        snr_data[L] = {'ell_arr': ell_arr, 'snr_quad': snr_quad, 'snr_iso': snr_iso}
+
+    # --- Panel 1: Shear SNR integrand ---
+
+    linewidth=2.5
+    fig, axes = plt.subplots(1, 2, figsize=figsize, sharey=True)
+    ax_shear = axes[0]
+
+    # for shear, discard high ell values which have numerical issues. 
+
+
+
+    for i, (L, col) in enumerate(zip(L_values, colors)):
+        blue_color = plt.cm.Blues(0.4 + 0.4 * (i / max(len(L_values) - 1, 1)))
+        ell_arr = snr_data[L]['ell_arr']
+        snr_quad = snr_data[L]['snr_quad']
+
+        for j, snr_quad_case in enumerate(snr_quad):
+            ls = linestyles[j % len(linestyles)]
+            label = rf"$L={L}$" if j == 0 else None
+
+            ax_shear.plot(ell_arr[ell_arr <= shear_lmax], snr_quad_case[ell_arr <= shear_lmax], color=blue_color, ls=ls, lw=linewidth, label=label)
+
+    if plot_xmin is not None:
+        ax_shear.set_xlim(plot_xmin, ellmax)
+
+    ax_shear.set_xscale("log")
+    ax_shear.set_yscale("log")
+    ax_shear.set_xlabel(r"$\ell$", fontsize=lab_fs)
+    ax_shear.set_ylabel(r"$d[\mathrm{SNR}(\phi_L)^2]/d\ln\ell$", fontsize=lab_fs)
+    ax_shear.set_title("Shear", fontsize=lab_fs)
+    ax_shear.grid(alpha=0.3)
+    ax_shear.legend(fontsize=legend_fs, ncol=1, loc=2)
+
+    if N_tris_list[0]==0.:
+        ax_shear.text(textxpos, textypos, r"$N_{L}^{\rm tris} = 0$", fontsize=lab_fs)
+    else:
+        ax_shear.text(textxpos, textypos, r"$N_{L}^{\rm tris} = 10^{"+str(int(np.log10(N_tris)))+"}$", fontsize=lab_fs)
+    if ylim_snr is not None:
+        ax_shear.set_ylim(ylim_snr)
+
+    # --- Panel 2: Magnification SNR integrand ---
+    ax_mag = axes[1]
+
+    for i, (L, col) in enumerate(zip(L_values, colors)):
+        red_color = plt.cm.Reds(0.4 + 0.4 * (i / max(len(L_values) - 1, 1)))
+        ell_arr = snr_data[L]['ell_arr']
+        snr_iso = snr_data[L]['snr_iso']
+
+        for j, snr_iso_case in enumerate(snr_iso):
+            ls = linestyles[j % len(linestyles)]
+            label = rf"$L={L}$" if j == 0 else None
+            ax_mag.plot(ell_arr[ell_arr > mag_lmin], snr_iso_case[ell_arr > mag_lmin], color=red_color, ls=ls, lw=linewidth, label=label)
+
+    if plot_xmin is not None:
+        ax_mag.set_xlim(plot_xmin, ellmax)
+    ax_mag.set_xscale("log")
+    ax_mag.set_yscale("log")
+    ax_mag.set_xlabel(r"$\ell$", fontsize=lab_fs)
+    # ax_mag.set_ylabel(r"$d[\mathrm{SNR}(\phi_L)^2]/d\ln\ell$", fontsize=lab_fs)
+    ax_mag.set_title("Magnification", fontsize=lab_fs)
+    ax_mag.grid(alpha=0.3)
+    ax_mag.legend(fontsize=legend_fs, ncol=1, loc=2)
+    if ylim_snr is not None:
+        ax_mag.set_ylim(ylim_snr)
+
+    if N_tris_list[0]==0.:
+        ax_mag.text(textxpos, textypos, r"$N_{L}^{\rm tris} = 0$", fontsize=lab_fs)
+    else:
+        ax_mag.text(textxpos, textypos, r"$N_{L}^{\rm tris} = 10^{"+str(int(np.log10(N_tris_list[0])))+"}$", fontsize=lab_fs)
+
+    plt.subplots_adjust(wspace=0.1)
+
+
+    for ax in [ax_shear, ax_mag]:
+        ax.tick_params(labelsize=12)
+    # --- Panel 3: Magnification fraction vs ell_max (for all N_tris variations) ---
+    fig_fraction, ax_fisher = plt.subplots(figsize=(6, 4))
+
+    for i, L in enumerate(L_values):
+        valid_ellmax = ellmax_arr[ellmax_arr >= L]
+        red_color = plt.cm.Reds(0.3 + 0.4 * (i / max(len(L_values) - 1, 1)))
+        blue_color = plt.cm.Blues(0.3 + 0.4 * (i / max(len(L_values) - 1, 1)))
+        ell_arr_base = snr_data[L]['ell_arr']
+        snr_quad_base = snr_data[L]['snr_quad']
+        snr_iso_base = snr_data[L]['snr_iso']
+
+        for n_idx, N_tris_val in enumerate(N_tris_list):
+            mag_fracs = []
+
+            for ellmax in valid_ellmax:
+                if ellmax <= ellmin:
+                    mag_fracs.append(np.nan)
+                    continue
+
+                # Interpolate precomputed SNR to this ellmax
+                mask = ell_arr_base <= ellmax
+                ell_subset = ell_arr_base[mask]
+                snr_quad_subset = snr_quad_base[n_idx][mask]
+                snr_iso_subset = snr_iso_base[n_idx][mask]
+
+                # Integrate SNR components over log-space
+                Fshear = np.trapz(snr_quad_subset, np.log(ell_subset))
+                Fmag = np.trapz(snr_iso_subset, np.log(ell_subset))
+                Ftot = Fshear + Fmag
+
+                mag_fracs.append(Fmag / Ftot if Ftot > 0 else np.nan)
+
+            ls = linestyles[n_idx % len(linestyles)]
+            label = rf"$L={L}$" if n_idx == 0 else None
+            ax_fisher.plot(valid_ellmax, mag_fracs, color=red_color, ls=ls, lw=linewidth, label=label)
+            ax_fisher.plot(valid_ellmax, np.ones_like(mag_fracs)-mag_fracs, color=blue_color, ls=ls, lw=linewidth, label=label)
+
+    ax_fisher.set_xscale("log")
+    if plot_xmin is not None:
+        ax_fisher.set_xlim(plot_xmin, 1e5)
+    ax_fisher.set_ylim(-0.02, 1.02)
+    ax_fisher.set_xlabel(r"$\ell_{\rm max}$", fontsize=lab_fs)
+    ax_fisher.set_ylabel(r"$F(\phi_L)_{\rm mag}/F(\phi_L)_{\rm tot}$", fontsize=lab_fs)
+    ax_fisher.grid(alpha=0.3)
+    ax_fisher.legend(fontsize=legend_fs, ncol=4, loc=2, bbox_to_anchor=(-0.1, 1.2))
+    ax_fisher.tick_params(labelsize=12)
+
+    # --- Panel 4: Cumulative Fisher information vs ell_max ---
+    fig_cumul, ax_cumul = plt.subplots(figsize=(6, 4))
+
+    for i, L in enumerate(L_values):
+        valid_ellmax = ellmax_arr[ellmax_arr >= L]
+        blue_color = plt.cm.Blues(0.4 + 0.4 * (i / max(len(L_values) - 1, 1)))
+        red_color = plt.cm.Reds(0.4 + 0.4 * (i / max(len(L_values) - 1, 1)))
+        ell_arr_base = snr_data[L]['ell_arr']
+        snr_quad_base = snr_data[L]['snr_quad']
+        snr_iso_base = snr_data[L]['snr_iso']
+
+        # Use first N_tris variation
+        n_idx = 0
+        shear_cumul = []
+        mag_cumul = []
+
+        for ellmax in valid_ellmax:
+            if ellmax <= ellmin:
+                shear_cumul.append(np.nan)
+                mag_cumul.append(np.nan)
+                continue
+
+            mask = ell_arr_base <= ellmax
+            ell_subset = ell_arr_base[mask]
+            snr_quad_subset = snr_quad_base[n_idx][mask]
+            snr_iso_subset = snr_iso_base[n_idx][mask]
+
+            Fshear = np.trapz(snr_quad_subset, np.log(ell_subset))
+            Fmag = np.trapz(snr_iso_subset, np.log(ell_subset))
+
+            shear_cumul.append(Fshear)
+            mag_cumul.append(Fmag)
+
+        ax_cumul.plot(valid_ellmax, shear_cumul, color=blue_color, ls='solid', lw=linewidth,
+                      label=rf"Shear $L={L}$")
+        ax_cumul.plot(valid_ellmax, mag_cumul, color=red_color, ls='solid', lw=linewidth, 
+                      label=rf"Magnification $L={L}$")
+
+    ax_cumul.set_xscale("log")
+    ax_cumul.set_yscale("log")
+    if plot_xmin is not None:
+        ax_cumul.set_xlim(plot_xmin, 1e5)
+    ax_cumul.set_xlabel(r"$\ell_{\rm max}$", fontsize=lab_fs)
+    ax_cumul.set_ylabel(r"Cumulative Fisher information", fontsize=lab_fs)
+    # ax_cumul.set_title("Cumulative SNR Integrand", fontsize=lab_fs)
+    ax_cumul.grid(alpha=0.3)
+    ax_cumul.legend(fontsize=legend_fs, ncol=2, loc=2, bbox_to_anchor=(-0.05, 1.45))
+    ax_cumul.tick_params(labelsize=12)
+    
+    return fig, fig_fraction, fig_cumul
+
 

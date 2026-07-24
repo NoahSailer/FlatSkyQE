@@ -27,10 +27,10 @@ def gen_suptitle(grab_cib_sim, add_noise, apply_mask, exact_beam=False, pixel_fn
 
     return suptitle
 
-def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7], xlim=[300, 8e4], 
-                         ncol=1, bbox_to_anchor=[0.0, 1.3], legend_fs=10, loc=3, plot_ratio=False, 
-                         ylim_ratio=None, rat_min=0.05, rat_max=50, title_fs=16, suptitle=None, plot_sem=True, 
-                         capsize=2.5, lMax=None, lMin=None):
+def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7], xlim=[300, 8e4],
+                         ncol=1, bbox_to_anchor=[0.0, 1.3], legend_fs=10, loc=3, plot_ratio=False,
+                         ylim_ratio=None, rat_min=0.05, rat_max=50, title_fs=16, suptitle=None, plot_sem=True,
+                         capsize=2.5, lMax=None, lMin=None, show=True):
     
     
     if res['clII'].shape[0] < 2:
@@ -219,8 +219,9 @@ def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7]
     plt.ylim(ylim_plot)
 
 #     plt.tight_layout()
-    plt.show()
-    
+    if show:
+        plt.show()
+
     return fig
 
 

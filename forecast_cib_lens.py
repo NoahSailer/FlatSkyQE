@@ -367,7 +367,7 @@ class ciber_lens_forecast():
     
         # Load the new cl_kcmb_kgal.csv file
         parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        clx_fpath = os.path.join(parent_dir, 'data', 'cl_kcmb_kgal.csv')
+        clx_fpath = os.path.join(parent_dir, 'data', 'cl_predictions', 'cl_kcmb_kgal.csv')
         
         clx_data = np.loadtxt(clx_fpath, delimiter=',')
         lC, clx = clx_data[:, 0], clx_data[:, 1] * clkg_scale
@@ -437,19 +437,25 @@ class ciber_lens_forecast():
         plt.show()  
         return fig  
         
-    def load_clg(self, ciber_inst, catname='WISE', addstr='unWISE_neo8', plot=False, basepath=None):
+    def load_clg(self, ciber_inst,
+                  catname='WISE', addstr='unWISE_neo8',
+                    plot=False, basepath='../data/jordan_mocks/v2/', 
+                    galstr='hsc_i_lt_25.0', zmin=0.0, zmax=1.0):
         
         # load autos from unWISE
-        
-            
-        cgps_file = load_ciber_gal_ps(ciber_inst, catname, addstr=addstr, basepath=basepath)
+        # cgps_file = load_ciber_gal_ps(ciber_inst, catname, addstr=addstr, basepath=basepath)
+        # lb, all_cl_gal, all_clerr_gal, ifield_list_use = [cgps_file[key] for key in ['lb', 'all_cl_gal', 'all_clerr_gal', 'ifield_list_use']]  
+        # clg = np.mean(all_cl_gal, axis=0) # used for sample variance estimate
 
-        lb, all_cl_gal, all_clerr_gal, ifield_list_use = [cgps_file[key] for key in ['lb', 'all_cl_gal', 'all_clerr_gal', 'ifield_list_use']]  
+        basepath = basepath+'mock_ps_pred/TM'+str(ciber_inst)+'/field_average/'
+        pred_fpath = basepath+'pred_cls_TM'+str(ciber_inst)+'_'+galstr+'.npz'
 
-        clg = np.mean(all_cl_gal, axis=0) # used for sample variance estimate
-                
+        galfile = np.load(pred_fpath)
         # separate shot noise from clustering
         
+        clg = galfile['gal_auto']
+        lb = galfile['lb']
+
         clg_sn = clg[-1]
         # clg_sn = np.mean(clg[lb > 1e5])
         
@@ -1621,7 +1627,7 @@ def plot_integrated_snr_vs_survey_params(inst=1, ifield=4,
                                          legend_fs=12, survey_labels=None, 
                                          bbox_to_anchor=[0.0, 1.3], 
                                          lab_fs=16, markersize=3, psf_fwhm=None, 
-                                         ylim=[1e-1, 1e2], textypos=6, textypos2=10, text_fs=12, 
+                                         ylim=[1e-1, 1e2], textypos=6, textypos2=10, textypos3=20, text_fs=12, 
                                          hspace=0.3, nl_kappa_nongauss=None):
     """
     Compute and plot integrated SNR as a function of tracer density and sky area
@@ -1688,7 +1694,7 @@ def plot_integrated_snr_vs_survey_params(inst=1, ifield=4,
         print(f"Using Gaussian beam with FWHM = {psf_fwhm:.2f} arcsec (σ = {sigma_rad*180*3600/np.pi:.2f} arcsec)")
     
     clf.load_clk()
-    clf.load_clg(inst, catname=catname, addstr=addstr)
+    clf.load_clg(inst, catname=catname, galstr='hsc_i_lt_25.0_CIBERfidmask_zmax=1.0')
     clf.load_clx(clkg_scale=0.5)
     clf.forecast_nlkappa(beam_correct=True, nl_kappa_nongauss=nl_kappa_nongauss, plot=False)
     
@@ -1756,13 +1762,10 @@ def plot_integrated_snr_vs_survey_params(inst=1, ifield=4,
                 linewidth=2, label=label, marker='o', markersize=markersize)
     
     ax1.set_xscale('log')
-    # ax1.set_xlim(2, 60)
-    # ax1.set_yscale('log')
     ax1.set_ylim(bottom=0, top=ylim[1])
-    ax1.set_xlabel('Tracer density $\\bar{n}$ [arcmin$^{-2}$]', fontsize=14)
+    ax1.set_xlabel('Tracer density $\\bar{n}$ [arcmin$^{-2}$]', fontsize=lab_fs)
     ax1.set_ylabel('Integrated SNR', fontsize=lab_fs)
-    # ax1.set_title(f'Sky area = {Adeg_fixed:.0f} deg$^2$', fontsize=14)
-    ax1.text(3.0, 10, f'Sky area = {Adeg_fixed:.0f} deg$^2$', fontsize=16)
+    ax1.text(3.0, textypos3, f'Sky area = {Adeg_fixed:.0f} deg$^2$', fontsize=16)
 
     # ax1.legend(fontsize=11)
     ax1.grid(alpha=0.3)
@@ -1801,7 +1804,7 @@ def plot_integrated_snr_vs_survey_params(inst=1, ifield=4,
                 linewidth=2, label=label)
     
     ax2.set_xscale('log')
-    ax2.set_xlabel('Sky area [deg$^2$]', fontsize=14)
+    ax2.set_xlabel('Sky area [deg$^2$]', fontsize=lab_fs)
     ax2.set_xlim(100, 30000)
     ax2.set_ylabel('Integrated SNR', fontsize=lab_fs)
     # ax2.set_yscale('log')

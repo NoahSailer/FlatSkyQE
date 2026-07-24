@@ -90,9 +90,127 @@ def calculate_analytic_bias(n_cib_per_pixel, n_g_per_pixel,
 	
 	return delta_c, c_i_shot, c_i2_g_shot, galshot, trispec_noise_cib, trispec_noise_g
 
+def effective_beam_skew_I2g_correct(L_vals, lMin, lMax, B_ell_fn=None, W_ell_fn=None, n_ell_grid=200, n_theta_grid=32):
+	"""
+	Effective beam suppression for C_L^{I^2 x g} in Poisson limit, with proper 2D vector geometry.
+
+	For each output multipole L (scalar magnitude), integrate over all 2D ℓ vectors such that:
+	1. |ℓ| ∈ [lMin, lMax]
+	2. |L - ℓ| ∈ [lMin, lMax]  (where L - ℓ is vector subtraction)
+
+	The partner magnitude |L - ℓ| = √(L² + ℓ² - 2Lℓ cos θ) depends on the angle θ between L and ℓ.
+
+	Parameters
+	----------
+	L_vals : array_like
+		Array of output multipoles (one per bandpower).
+	lMin, lMax : float
+		Bandpass annulus edges [lMin, lMax].
+	B_ell_fn : callable, optional
+		Function returning beam factor B(ell). If None, returns all 1.0s (no beam).
+	W_ell_fn : callable, optional
+		Optional weight function W(ell) to apply to integrand.
+	n_ell_grid : int
+		Number of integration points for ell magnitude in [lMin, lMax].
+	n_theta_grid : int
+		Number of integration points for angle θ in the valid range.
+
+	Returns
+	-------
+	Beff_skew : ndarray
+		Effective beam × mode-overlap per output L (length = len(L_vals)).
+	"""
+
+	# Create radial grid for ℓ magnitude in the bandpass
+	ell_grid = np.logspace(np.log10(lMin), np.log10(lMax), n_ell_grid)
+	d_ell = ell_grid[1:] - ell_grid[:-1]
+	ell_centers = 0.5 * (ell_grid[:-1] + ell_grid[1:])
+
+	# Beam function for small-scale leg ell
+	if B_ell_fn is not None:
+		B_ell = B_ell_fn(ell_centers)
+	else:
+		B_ell = np.ones_like(ell_centers)
+
+	# Weight function
+	if W_ell_fn is not None:
+		W_ell = W_ell_fn(ell_centers)
+	else:
+		W_ell = np.ones_like(ell_centers)
+
+	# Total 2D modes in the annulus: ∫∫ ℓ dℓ dθ from ℓ=lMin to lMax, θ=0 to 2π
+	total_modes_2d = np.pi * (lMax**2 - lMin**2)
+
+	n_L = len(L_vals)
+	Beff_skew = np.zeros(n_L)
+
+	for i, L in enumerate(L_vals):
+		if L == 0:
+			Beff_skew[i] = 0.0
+			continue
+
+		valid_modes_integral = 0.0
+		beam_weighted_integral = 0.0
+
+		for j, ell in enumerate(ell_centers):
+			# For this radial ℓ, find the angular range where |L - ℓ| ∈ [lMin, lMax]
+			# |L - ℓ|² = L² + ℓ² - 2Lℓ cos(θ)
+
+			# Constraints: lMin² ≤ L² + ℓ² - 2Lℓ cos(θ) ≤ lMax²
+			# Rearrange: (L² + ℓ² - lMax²)/(2Lℓ) ≤ cos(θ) ≤ (L² + ℓ² - lMin²)/(2Lℓ)
+
+			cos_lower = (L**2 + ell**2 - lMax**2) / (2.0 * L * ell)
+			cos_upper = (L**2 + ell**2 - lMin**2) / (2.0 * L * ell)
+
+			# Clamp to [-1, 1] (physical range for cosine)
+			cos_lower = np.clip(cos_lower, -1.0, 1.0)
+			cos_upper = np.clip(cos_upper, -1.0, 1.0)
+
+			if cos_lower > cos_upper:
+				continue  # No valid angular range
+
+			# Valid angle range in [0, π] where cos is monotonic
+			theta_lower = np.arccos(cos_upper)  # where |L-ℓ| is maximum
+			theta_upper = np.arccos(cos_lower)  # where |L-ℓ| is minimum
+
+			# Total valid angle measure (accounting for both sides of unit circle)
+			delta_theta = 2.0 * (theta_upper - theta_lower)
+
+			if delta_theta <= 0:
+				continue
+
+			# 2D mode weight contribution: ℓ dℓ × delta_θ
+			mode_weight = ell * delta_theta * d_ell[j]
+			valid_modes_integral += mode_weight
+
+			# For beam weighting, integrate over the valid θ range
+			theta_samples = np.linspace(theta_lower, theta_upper, n_theta_grid)
+
+			B_partner_avg = 0.0
+			for theta in theta_samples:
+				partner_mag = np.sqrt(L**2 + ell**2 - 2.0*L*ell*np.cos(theta))
+				if B_ell_fn is not None:
+					B_partner_avg += B_ell_fn(partner_mag)
+				else:
+					B_partner_avg += 1.0
+
+			B_partner_avg /= len(theta_samples)
+
+			# Beam weighted contribution
+			beam_product = B_ell[j] * B_partner_avg
+			beam_weighted_integral += W_ell[j] * beam_product * mode_weight
+
+		if valid_modes_integral > 0:
+			mode_overlap_frac = valid_modes_integral / total_modes_2d
+			beam_weight_avg = beam_weighted_integral / valid_modes_integral
+			Beff_skew[i] = mode_overlap_frac * beam_weight_avg
+		else:
+			Beff_skew[i] = 0.0
+
+	return Beff_skew
 
 
-def effective_beam_skew_I2g(L_vals, lEdges, ell_grid, flat_sky=True, fwhm_I=None, B_ell_fn=None):
+def effective_beam_skew_I2g(L_vals, lEdges, ell_grid, flat_sky=True, fwhm_I=None, B_ell_fn=None, W_ell_fn=None):
 	"""
 	Effective beam suppression for C_L^{I^2 x g} in Poisson limit,
 	with beam on I, no beam on g.
@@ -109,17 +227,30 @@ def effective_beam_skew_I2g(L_vals, lEdges, ell_grid, flat_sky=True, fwhm_I=None
 		1D array of ell magnitudes for Fourier modes (flat-sky), should cover smaller-scale modes contributing to skew contraction.
 	flat_sky : bool
 		Use flat-sky or full-sky beam definition.
+	B_ell_fn : callable
+		Function returning beam factor B(ell) as alternative to fwhm_I.
+	W_ell_fn : callable
+		Optional weight function W(ell) to apply to the integrand.
 
 	Returns
 	-------
 	Beff_skew_bins : ndarray
 		Effective beam per skew band (I^2 leg has two beams).
 	"""
-	
+
 	if fwhm_I is not None:
 		B_I = gaussian_beam_window(ell_grid, fwhm_I, flat_sky=flat_sky)
 	elif B_ell_fn is not None:
 		B_I = B_ell_fn(ell_grid)
+	else:
+		# return np.ones(len(lEdges) - 1)
+		B_I = np.ones_like(ell_grid)
+
+	# Apply optional weighting
+	if W_ell_fn is not None:
+		W_ell_vals = W_ell_fn(ell_grid)
+	else:
+		W_ell_vals = np.ones_like(ell_grid)
 
 	weights = ell_grid if flat_sky else (2*ell_grid + 1)
 
@@ -131,8 +262,10 @@ def effective_beam_skew_I2g(L_vals, lEdges, ell_grid, flat_sky=True, fwhm_I=None
 		# Mean L for bin center (used for the second leg)
 		L_center = 0.5 * (L_low + L_high)
 
-		# For Poisson, integrate suppression from two I legs:
-		prod_B = B_I * np.interp(np.abs(L_center - ell_grid), ell_grid, B_I)
+		# For Poisson, integrate suppression from two I legs with weighting:
+		# integrand = W(ell) * B(ell) * B(|L-ell|)
+		B_Lminusell = np.interp(np.abs(L_center - ell_grid), ell_grid, B_I)
+		prod_B = W_ell_vals * B_I * B_Lminusell
 
 		sel = (ell_grid >= L_low) & (ell_grid < L_high)
 		Beff_skew_bins[i] = np.sum(weights[sel] * prod_B[sel]) / np.sum(weights[sel])
