@@ -34,7 +34,7 @@ from ciber.mocks.lognormal import *
 
 def generate_cib_map(map_size=1024, n_cib_per_pixel=0.01, n_gal_per_pixel=0.01,
                      s_min=1.0, s_max=100.0, alpha=2.5, seed=42, mock_sim_fpath=False, fieldidx=0, ciber_inst=1, 
-                     apply_mask=False):
+                     apply_mask=False, dx=None, dy=None, mu=None):
     """
     Generates a 2D CIB intensity map with Poisson-distributed point sources.
 
@@ -95,11 +95,28 @@ def generate_cib_map(map_size=1024, n_cib_per_pixel=0.01, n_gal_per_pixel=0.01,
             s_pow = (s_max**(1 - alpha) - s_min**(1 - alpha)) * y + s_min**(1 - alpha)
             fluxes = s_pow**(1 / (1 - alpha))
 
+        # Apply lensing: perturb positions and magnify fluxes if provided
+        if dx is not None and dy is not None and mu is not None:
+            # Perturb source positions by deflection fields
+            x_coords_lens = x_coords + dx[y_coords, x_coords]
+            y_coords_lens = y_coords + dy[y_coords, x_coords]
+
+            # Magnify fluxes by magnification map
+            fluxes_lens = fluxes * mu[y_coords, x_coords]
+
+            # Clip perturbed positions to map boundaries
+            x_coords_lens = np.clip(x_coords_lens, 0, map_size - 1).astype(int)
+            y_coords_lens = np.clip(y_coords_lens, 0, map_size - 1).astype(int)
+
+            x_coords = x_coords_lens
+            y_coords = y_coords_lens
+            fluxes = fluxes_lens
+
         # Place fluxes into the map at the source locations.
         # Using np.add.at for safe addition in case multiple sources fall in one pixel.
-        
+
         ratio_gal_cib = int(n_cib_per_pixel/n_gal_per_pixel)
-        
+
         np.add.at(cib_map, (y_coords, x_coords), fluxes)
 
         np.add.at(counts_map, (y_coords[::ratio_gal_cib], x_coords[::ratio_gal_cib]), 1.)

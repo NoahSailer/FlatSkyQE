@@ -27,6 +27,68 @@ def gen_suptitle(grab_cib_sim, add_noise, apply_mask, exact_beam=False, pixel_fn
 
     return suptitle
 
+
+def plot_input_recovered_kappa(
+        res,
+        bbox_to_anchor=None,
+        ncol=1,
+        figsize=(6, 5),
+        markersize=5,
+        legend_fs=10,
+        xlim=[100, 1.0e5],
+        ylim=[1e-11, 1e-5],
+        loc=3,
+        lMax=None,
+        lMin=None,
+        plot_sem=True,
+        capsize=2.5,
+    ):
+    # Function body goes here
+
+
+    clk_input = np.mean(res['clkg_kappa_input'], axis=0)
+    kappa_amp = res['kappa_amplitude']
+    lC = res['lC']
+    refclkg = res['analytic_bias']
+
+    y_clkg, sem_clkg = np.mean(res['clkg_kappa_input'], axis=0), np.std(res['clkg_kappa_input'], axis=0, ddof=1)/np.sqrt(res['clkg_kappa_input'].shape[0])
+    y_dclkg, sem_dclkg = np.mean(res['dclkg_kappa_input'], axis=0), np.std(res['dclkg_kappa_input'], axis=0, ddof=1)/np.sqrt(res['dclkg_kappa_input'].shape[0])
+
+    clkg_label = '$C_{L}^{\\hat{\\kappa}\\kappa_{input}}$'
+    dclkg_label = '$C_{L}^{I^2\\kappa_{input}}$ (mocks)'
+
+    print('y_dclkg:', y_dclkg)
+
+    fig = plt.figure(figsize=figsize)
+
+    if plot_sem:
+        plt.errorbar(lC, y_clkg, yerr=sem_clkg, label=clkg_label, color='r', marker='x', markersize=markersize, capsize=capsize)
+        plt.errorbar(lC, y_dclkg, yerr=sem_dclkg, label=dclkg_label, color='b', marker='^', markersize=markersize, capsize=capsize)
+    else:
+        plt.plot(lC, y_clkg, label=clkg_label, color='r', marker='x', markersize=markersize)
+        plt.plot(lC, y_dclkg, label=dclkg_label, color='b', marker='^', markersize=markersize)
+    # If lensing was applied, show the input C_L^kappa spectrum
+    print('clk input is ', clk_input)
+    plt.plot(lC, clk_input, label=f'Input $C_{{L}}^{{\\kappa}}$ (amp={kappa_amp})', color='purple', linewidth=2.5, linestyle='--', zorder=5)
+
+    plt.axhline(refclkg, label='$\\Delta C_{L}^{\\kappa g}=\\Omega_{\\rm pix}C_{\\ell}^{I^2g}/2C_{\\ell}^{II}$', color='k', linestyle='dashed')
+    if lMax is not None:
+        plt.axvline(lMax, color='k', linestyle='solid')
+    if lMin is not None:
+        plt.axvline(lMin, color='k', linestyle='solid')
+
+    plt.xlabel('$L$', fontsize=14)
+
+    plt.xscale('log')
+    plt.yscale('log')
+    plt.legend(ncol=ncol, bbox_to_anchor=bbox_to_anchor, fontsize=legend_fs, loc=loc)
+    plt.xlim(xlim)
+
+    plt.ylim(ylim)
+
+    return fig
+
+
 def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7], xlim=[300, 8e4],
                          ncol=1, bbox_to_anchor=[0.0, 1.3], legend_fs=10, loc=3, plot_ratio=False,
                          ylim_ratio=None, rat_min=0.05, rat_max=50, title_fs=16, suptitle=None, plot_sem=True,
@@ -48,8 +110,17 @@ def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7]
 
     y_clII, sem_clII = np.mean(res['clII'], axis=0), np.std(res['clII'], axis=0, ddof=1)/np.sqrt(res['clII'].shape[0])
     y_clbis, sem_clbis = np.mean(res['cl_bis'], axis=0), np.std(res['cl_bis'], axis=0, ddof=1)/np.sqrt(res['cl_bis'].shape[0])
-    y_clkg, sem_clkg = np.mean(res['clkg'], axis=0), np.std(res['clkg'], axis=0, ddof=1)/np.sqrt(res['clkg'].shape[0])
-    y_dclkg, sem_dclkg = np.mean(res['dclkg'], axis=0), np.std(res['dclkg'], axis=0, ddof=1)/np.sqrt(res['dclkg'].shape[0])
+
+    # Use kappa cross-correlation if lensing was applied, otherwise use galaxy cross
+    if 'enable_lensing' in res and res['enable_lensing']:
+        y_clkg, sem_clkg = np.mean(res['clkg_kappa_input'], axis=0), np.std(res['clkg_kappa_input'], axis=0, ddof=1)/np.sqrt(res['clkg_kappa_input'].shape[0])
+        y_dclkg, sem_dclkg = np.mean(res['dclkg_kappa_input'], axis=0), np.std(res['dclkg_kappa_input'], axis=0, ddof=1)/np.sqrt(res['dclkg_kappa_input'].shape[0])
+        using_kappa_input = True
+    else:
+        y_clkg, sem_clkg = np.mean(res['clkg'], axis=0), np.std(res['clkg'], axis=0, ddof=1)/np.sqrt(res['clkg'].shape[0])
+        y_dclkg, sem_dclkg = np.mean(res['dclkg'], axis=0), np.std(res['dclkg'], axis=0, ddof=1)/np.sqrt(res['dclkg'].shape[0])
+        using_kappa_input = False
+
     y_clgg, sem_clgg = np.mean(res['clgg'], axis=0), np.std(res['clgg'], axis=0, ddof=1)/np.sqrt(res['clgg'].shape[0])
     
     refclii, refclbis, refclkg, refclgg = res['c_i_shot'], res['c_i2_g_shot'], res['analytic_bias'], res['galshot']
@@ -83,16 +154,31 @@ def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7]
 
     if plot_ratio:
         if plot_sem:
-            plt.errorbar(lC, y_clgg, yerr=sem_clgg, label='$C_{\\ell}^{gg}$/theory', color='C1', marker='.', markersize=markersize, capsize=capsize)
+            if using_kappa_input:
+                plt.errorbar(lC, y_clgg, yerr=sem_clgg, label='$C_{\\ell}^{II}$/theory', color='C1', marker='.', markersize=markersize, capsize=capsize)
+            else:
+                plt.errorbar(lC, y_clgg, yerr=sem_clgg, label='$C_{\\ell}^{gg}$/theory', color='C1', marker='.', markersize=markersize, capsize=capsize)
         else:
-            plt.plot(lC, y_clgg, label='$C_{\\ell}^{gg}$/theory', color='C1', marker='.', markersize=markersize)
+            if using_kappa_input:
+                plt.plot(lC, y_clgg, label='$C_{\\ell}^{II}$/theory', color='C1', marker='.', markersize=markersize)
+            else:
+                plt.plot(lC, y_clgg, label='$C_{\\ell}^{gg}$/theory', color='C1', marker='.', markersize=markersize)
     else:
         if plot_sem:
-            plt.errorbar(lC, y_clgg, yerr=sem_clgg, label='$C_{\\ell}^{gg}$ (mocks)', color='C1', marker='.', markersize=markersize, capsize=capsize)
+            if using_kappa_input:
+                plt.errorbar(lC, y_clgg, yerr=sem_clgg, label='$C_{\\ell}^{gg}$ (galaxy tracer)', color='C1', marker='.', markersize=markersize, capsize=capsize)
+            else:
+                plt.errorbar(lC, y_clgg, yerr=sem_clgg, label='$C_{\\ell}^{gg}$ (mocks)', color='C1', marker='.', markersize=markersize, capsize=capsize)
         else:
-            plt.plot(lC, y_clgg, label='$C_{\\ell}^{gg}$ (mocks)', color='C1', marker='.', markersize=markersize)
-    
-    plt.axhline(refclgg, label='$1/\\overline{n}_g$', color='k', linestyle='dashed')
+            if using_kappa_input:
+                plt.plot(lC, y_clgg, label='$C_{\\ell}^{gg}$ (galaxy tracer)', color='C1', marker='.', markersize=markersize)
+            else:
+                plt.plot(lC, y_clgg, label='$C_{\\ell}^{gg}$ (mocks)', color='C1', marker='.', markersize=markersize)
+
+    if using_kappa_input:
+        plt.axhline(refclgg, label='$C_{\\ell}^{gg} = \\overline{n}_g$ (shot)', color='k', linestyle='dashed')
+    else:
+        plt.axhline(refclgg, label='$1/\\overline{n}_g$', color='k', linestyle='dashed')
 
     if lMax is not None:
         plt.axvline(lMax, color='k', linestyle='solid')
@@ -189,19 +275,34 @@ def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7]
         # plt.plot(lC, np.mean(res['clkg'], axis=0), label='$C_{L}^{\\hat{\\kappa} g}$', color='r', marker='x', markersize=markersize)
         # plt.plot(lC, np.mean(res['dclkg'], axis=0), label='$\\Delta C_{L}^{\\kappa g}$ (mocks)', color='b', marker='^', markersize=markersize)
 
-        if plot_sem:
-            plt.errorbar(lC, y_clkg, yerr=sem_clkg, label='$C_{L}^{\\hat{\\kappa} g}$', color='r', marker='x', markersize=markersize, capsize=capsize)
-            plt.errorbar(lC, y_dclkg, yerr=sem_dclkg, label='$\\Delta C_{L}^{\\kappa g}$ (mocks)', color='b', marker='^', markersize=markersize, capsize=capsize)
+        if using_kappa_input:
+            clkg_label = '$C_{L}^{\\hat{\\kappa}\\kappa_{input}}$'
+            dclkg_label = '$C_{L}^{I^2\\kappa_{input}}$ (mocks)'
         else:
-            plt.plot(lC, y_clkg, label='$C_{L}^{\\hat{\\kappa} g}$', color='r', marker='x', markersize=markersize)
-            plt.plot(lC, y_dclkg, label='$\\Delta C_{L}^{\\kappa g}$ (mocks)', color='b', marker='^', markersize=markersize)
+            clkg_label = '$C_{L}^{\\hat{\\kappa} g}$'
+            dclkg_label = '$\\Delta C_{L}^{\\kappa g}$ (mocks)'
 
+        if plot_sem:
+            plt.errorbar(lC, y_clkg, yerr=sem_clkg, label=clkg_label, color='r', marker='x', markersize=markersize, capsize=capsize)
+            plt.errorbar(lC, y_dclkg, yerr=sem_dclkg, label=dclkg_label, color='b', marker='^', markersize=markersize, capsize=capsize)
+        else:
+            plt.plot(lC, y_clkg, label=clkg_label, color='r', marker='x', markersize=markersize)
+            plt.plot(lC, y_dclkg, label=dclkg_label, color='b', marker='^', markersize=markersize)
 
-    plt.axhline(refclkg, label='$\\Delta C_{L}^{\\kappa g}=\\Omega_{\\rm pix}C_{\\ell}^{I^2g}/2C_{\\ell}^{II}$', color='k', linestyle='dashed')    
+    # If lensing was applied, show the input C_L^kappa spectrum
+    if res['enable_lensing']:
+        from lensing_utils import build_kappa_power_spectrum
+        kappa_amp = res.get('kappa_amplitude', 1.0)
+        f_kappa = build_kappa_power_spectrum(ell_min=1, ell_max=2.*lC[-1], clkg_scale=1.0)
+        clk_input = f_kappa(lC) * kappa_amp
+        print('clk input is ', clk_input)
+        plt.plot(lC, clk_input, label=f'Input $C_{{L}}^{{\\kappa}}$ (amp={kappa_amp})', color='purple', linewidth=2.5, linestyle='--', zorder=5)
+
+    plt.axhline(refclkg, label='$\\Delta C_{L}^{\\kappa g}=\\Omega_{\\rm pix}C_{\\ell}^{I^2g}/2C_{\\ell}^{II}$', color='k', linestyle='dashed')
     if lMax is not None:
         plt.axvline(lMax, color='k', linestyle='solid')
     if lMin is not None:
-        plt.axvline(lMin, color='k', linestyle='solid') 
+        plt.axvline(lMin, color='k', linestyle='solid')
 
     plt.xlabel('$L$', fontsize=14)
 

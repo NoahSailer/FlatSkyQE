@@ -1,0 +1,51 @@
+# Default sweep configuration for scripts/run_mock_tests.py
+# CLI arguments override these values.
+#
+# Key parameters:
+#   use_beam: true/false - Enable/disable PSF/beam convolution (delta functions when false)
+#   exact_beam: true/false - Use CIBER beam (when psf_fwhm=None) vs approximate beam
+#   add_noise: true/false - Add Poisson/read noise
+#   apply_mask: true/false - Apply observational mask to maps
+
+lmax_range:
+  - 30000.0
+  - 50000.0
+  - 70000.0
+
+
+# Use null for CIBER beam, or float values for Gaussian PSF FWHM in pixels.
+psf_fwhm_range:
+  - null
+
+nsim: 5
+pixel_fn_correct: false
+lensmode: unlensed
+nbar: 100000.0
+exact_beam: true
+use_precomp: false
+save: true
+plot: true
+add_noise: false
+apply_mask: false
+verbose: true
+save_intermediate_plots: true
+
+lmin: 10000.0
+N_CIB_PER_PIXEL: 0.2
+N_G_PER_PIXEL: 0.2
+alpha: 0.0
+skew_filter_mode: bandpass
+s_max: 10.0
+use_beam: true
+
+datestr: "111125"
+res_root: res
+fig_root: figures
+
+# Lensing configuration
+# enable_lensing: Set to true to apply kappa-field lensing to the CIB map
+# kappa_amplitude: Scalar to tune the amplitude of the lensing power spectrum (default 1.0)
+# kappa_seed: Seed for reproducible kappa realizations (default 12345)
+enable_lensing: true
+kappa_amplitude: 5.0
+kappa_seed: 12345

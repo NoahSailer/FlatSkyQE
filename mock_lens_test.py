@@ -37,6 +37,78 @@ from cibmockgen import *
 from map_clus_utils import proc_input_map, compute_map_ps, proc_skewspec, proc_clkg, compute_skew_cl_I2G_simp
 from forecast_cib_lens import ciber_lens_forecast
 from bias_modl import effective_beam_skew_I2g_correct
+from lensing_utils import build_kappa_power_spectrum, generate_kappa_realization
+
+def proc_clkg_with_kappa(baseMap, dataFourier, kappa_fourier, f_kappa, kappa_amplitude,
+                         lC, cl_fns, corr_facs, obs_map=None, param_dict=None, config_dict=None):
+    """
+    Compute C_L^{κ̂ κ_input} and C_L^{I^2 κ_input} where κ_input is the input kappa field.
+
+    Returns clkg_kappa (QE x kappa) and dclkg_kappa (skew x kappa, analogous to bispectrum bias).
+
+    Parameters
+    ----------
+    param_dict : dict, optional
+        Contains 'lMin', 'lMax' for computing L-dependent beam correction
+    config_dict : dict, optional
+        Contains 'skew_filter_mode' to match beam correction with bispectrum
+    """
+    lC_out, clkg_raw, clkgerr_raw = baseMap.crossPowerSpectrum(dataFourier, kappa_fourier, plot=False)
+
+    clkg_raw, clkgerr_raw = proc_clkg(lC_out, clkg_raw, clkgerr_raw, B_ell=None,
+                                      kcorr=corr_facs.get('kcorr', 1.0),
+                                      unmask_frac=corr_facs.get('unmask_frac', 1.0))
+
+    dclkg_raw = np.zeros_like(clkg_raw)
+    if obs_map is not None:
+        obs_map_squared = obs_map**2
+
+        obs_map_squared[obs_map_squared != 0] -= np.mean(obs_map_squared[obs_map_squared != 0])
+
+        obs_map_sq_fourier = baseMap.fourier(obs_map_squared)
+        lC_out_sq, dclkg_raw, dclkgerr_raw = baseMap.crossPowerSpectrum(obs_map_sq_fourier, kappa_fourier, plot=False)
+
+        # Apply same corrections as bispectrum: L-dependent vbeam + unmask_frac
+        vbeam_L = None
+        if param_dict is not None and config_dict is not None:
+            lMin = param_dict.get('lMin', 1000)
+            lMax = param_dict.get('lMax', 80000)
+            B_ell_fn = cl_fns.get('B_ell', None)
+            W_ell_fn = cl_fns.get('W_ell', None)
+            skew_filter_mode = config_dict.get('skew_filter_mode', 'bandpass')
+
+            if skew_filter_mode == 'bandpass':
+                vbeam_L = effective_beam_skew_I2g_correct(
+                    lC, lMin, lMax,
+                    B_ell_fn=B_ell_fn, W_ell_fn=None
+                )
+            elif skew_filter_mode == 'wiener':
+                if W_ell_fn is not None:
+                    def W_ell_sq(ell):
+                        return W_ell_fn(ell)**2
+                    vbeam_L = effective_beam_skew_I2g_correct(
+                        lC, lMin, lMax,
+                        flat_sky=True, B_ell_fn=B_ell_fn, W_ell_fn=W_ell_sq
+                    )
+                else:
+                    vbeam_L = effective_beam_skew_I2g_correct(
+                        lC, lMin, lMax,
+                        flat_sky=True, B_ell_fn=B_ell_fn, W_ell_fn=None
+                    )
+
+            # Apply mode fraction to L-dependent array (same as bispectrum)
+            vbeam_L_corrected = vbeam_L * corr_facs.get('modefrac', 1.0)
+            dclkg_raw, dclkgerr_raw = proc_skewspec(lC_out_sq, dclkg_raw, dclkgerr_raw, B_ell=None,
+                                                    vbeam=vbeam_L_corrected,
+                                                    unmask_frac=corr_facs.get('unmask_frac', 1.0))
+        else:
+            # Fallback: no L-dependent correction, use scalar unmask only
+            dclkg_raw, dclkgerr_raw = proc_clkg(lC_out_sq, dclkg_raw, dclkgerr_raw, B_ell=None,
+                                                kcorr=corr_facs.get('kcorr', 1.0),
+                                                unmask_frac=corr_facs.get('unmask_frac', 1.0))
+
+    return clkg_raw, dclkg_raw
+
 
 class ScaledP2dAuto:
     def __init__(self, original_p2d, alpha):
@@ -763,20 +835,21 @@ def save_current_plot(fig, tag, sim_idx, save_intermediate_plots=False, intermed
     plt.close(fig)
     print("Saved intermediate plot:", fpath)
 
-def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024, 
+def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
                          N_CIB_PER_PIXEL = 0.2,  # Average 1 source every 20 pixels
-                        N_G_PER_PIXEL = 0.2, 
+                        N_G_PER_PIXEL = 0.2,
                           Apix=1.15e-9, sizeX=2., sizeY = 2.,
-                          lMin=10000, lMax = 80000, 
-                         add_noise=False, sigma_noise_pix=25, psf_pix_fwhm=None, 
+                          lMin=10000, lMax = 80000,
+                         add_noise=False, sigma_noise_pix=25, psf_pix_fwhm=None,
                          plot=False, alpha=0., apply_mask=False,
-                         grab_cib_sim=False, datestr='042725', ciber_inst=1, 
-                         lensmode='randomized', ifield=4, n_cib_sim=5, 
+                         grab_cib_sim=False, datestr='042725', ciber_inst=1,
+                         lensmode='randomized', ifield=4, n_cib_sim=5,
                          pixel_fn_correct=False, mockstr='JHlt16_nbar100000.0',
-                         use_beam_in_norm=True, skew_filter_mode='bandpass', 
+                         use_beam_in_norm=True, skew_filter_mode='bandpass',
                          s_max=100.0, verbose=1,
                          save_intermediate_plots=False,
-                         intermediate_plot_dir=None):
+                         intermediate_plot_dir=None,
+                         enable_lensing=False, kappa_amplitude=1.0, kappa_seed=12345):
 
     def vprint(*args, level=1, **kwargs):
         if verbose >= level:
@@ -806,6 +879,11 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
     clgg, clII, cl_bis,\
         clkg, dclkg, cl_bis_WF, dclkg_WF, \
             N_L_kappa, N_L_err_kappa = [np.zeros((nsim, 50)) for _ in range(9)]
+
+    clkg_kappa_input, dclkg_kappa_input = [np.zeros((nsim, 50)) for _ in range(2)]
+
+    kcorr_list, vbeam_list, unmask_frac_list, modefrac_list = [], [], [], []
+    kappa_fourier_list, f_kappa_list = [], []
     
     param_dict['pixel_size_arcsec'] = 3600.*(sizeX/MAP_SIZE)
     vprint('pixel size:', param_dict['pixel_size_arcsec'])
@@ -836,12 +914,33 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
             mock_sim_fpath = None
 
         vprint('[sim %d] loading from ' % x, mock_sim_fpath)
+
+        if enable_lensing:
+            vprint(f'[sim {x}] generating kappa realization with amplitude={kappa_amplitude}, seed={kappa_seed}')
+            f_kappa = build_kappa_power_spectrum(ell_min=1, ell_max=2.*lMax, clkg_scale=1.0)
+            kappa_fourier = generate_kappa_realization(baseMap, f_kappa, amplitude=kappa_amplitude, seed=kappa_seed, test=False)
+
+            kappa_real = baseMap.inverseFourier(kappa_fourier)
+            dx, dy = baseMap.deflectionFromKappa(kappa_fourier)
+            mu = 1.0 + 2.0 * kappa_real
+
+            kappa_fourier_list.append(kappa_fourier)
+            f_kappa_list.append(f_kappa)
+
         # This map represents the true sky intensity I(x, y)
-        cib_intensity_map, all_cib_fluxes, counts_map, mask = generate_cib_map(
-            map_size=MAP_SIZE,
-            n_cib_per_pixel=N_CIB_PER_PIXEL, n_gal_per_pixel=N_G_PER_PIXEL,
-            seed=None, s_max=s_max,
-        mock_sim_fpath=mock_sim_fpath, apply_mask=apply_mask)
+        if enable_lensing:
+            cib_intensity_map, all_cib_fluxes, counts_map, mask = generate_cib_map(
+                map_size=MAP_SIZE,
+                n_cib_per_pixel=N_CIB_PER_PIXEL, n_gal_per_pixel=N_G_PER_PIXEL,
+                seed=None, s_max=s_max,
+            mock_sim_fpath=mock_sim_fpath, apply_mask=apply_mask,
+            dx=dx, dy=dy, mu=mu)
+        else:
+            cib_intensity_map, all_cib_fluxes, counts_map, mask = generate_cib_map(
+                map_size=MAP_SIZE,
+                n_cib_per_pixel=N_CIB_PER_PIXEL, n_gal_per_pixel=N_G_PER_PIXEL,
+                seed=None, s_max=s_max,
+            mock_sim_fpath=mock_sim_fpath, apply_mask=apply_mask)
 
         vprint(f'[sim {x}] generated CIB map: {len(all_cib_fluxes)} sources')
         vprint('mean mask is ', np.mean(mask))
@@ -851,6 +950,48 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
 
         cib_intensity_map -= np.mean(cib_intensity_map)
         cibFourier = baseMap.fourier(cib_intensity_map)
+
+        if enable_lensing and x == 0 and make_intermediate_plots:
+            kappa_real = baseMap.inverseFourier(kappa_fourier)
+            fig, axes = plt.subplots(2, 2, figsize=(10, 10))
+
+            vmin_kappa, vmax_kappa = np.percentile(kappa_real, [1, 99])
+            im0 = axes[0, 0].imshow(kappa_real, cmap='RdBu_r', vmin=vmin_kappa, vmax=vmax_kappa)
+            axes[0, 0].set_title('Kappa realization')
+            plt.colorbar(im0, ax=axes[0, 0])
+
+            vmin_mu, vmax_mu = np.percentile(mu, [1, 99])
+            im1 = axes[0, 1].imshow(mu, cmap='viridis', vmin=vmin_mu, vmax=vmax_mu)
+            axes[0, 1].set_title('Magnification $\\mu = 1 + 2\\kappa$')
+            plt.colorbar(im1, ax=axes[0, 1])
+
+            vmin_dx, vmax_dx = np.percentile(dx, [1, 99])
+            im2 = axes[1, 0].imshow(dx, cmap='RdBu_r', vmin=vmin_dx, vmax=vmax_dx)
+            axes[1, 0].set_title('Deflection $d_x$')
+            plt.colorbar(im2, ax=axes[1, 0])
+
+            vmin_dy, vmax_dy = np.percentile(dy, [1, 99])
+            im3 = axes[1, 1].imshow(dy, cmap='RdBu_r', vmin=vmin_dy, vmax=vmax_dy)
+            axes[1, 1].set_title('Deflection $d_y$')
+            plt.colorbar(im3, ax=axes[1, 1])
+
+            plt.tight_layout()
+            save_current_plot(fig, "lensing_fields", x, save_intermediate_plots=save_intermediate_plots, intermediate_plot_dir=intermediate_plot_dir)
+            plt.close()
+
+            fig = plt.figure(figsize=(6, 4))
+            lrange_plot = np.logspace(1, np.log10(2.*lMax), 100)
+            clk_input = f_kappa(lrange_plot) * kappa_amplitude
+            plt.plot(lrange_plot, clk_input, linewidth=2.5, color='purple', label=f'Input $C_L^\\kappa$ (amp={kappa_amplitude})')
+            plt.xscale('log')
+            plt.yscale('log')
+            plt.xlabel('$L$', fontsize=14)
+            plt.ylabel('$C_L^\\kappa$', fontsize=14)
+            plt.grid(alpha=0.3)
+            plt.legend(fontsize=12)
+            plt.title('Lensing power spectrum used in simulation')
+            save_current_plot(fig, "lensing_spectrum", x, save_intermediate_plots=save_intermediate_plots, intermediate_plot_dir=intermediate_plot_dir)
+            plt.close()
 
         if psf_pix_fwhm is not None:
             if psf_pix_fwhm > 0:
@@ -997,7 +1138,7 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
             save_current_plot(fig, "qe_normalization", x, save_intermediate_plots=save_intermediate_plots, intermediate_plot_dir=intermediate_plot_dir)
 
         clgg[x] = psres['clgg']
-        clII[x] = psres['clII']    
+        clII[x] = psres['clII']
         cl_bis[x] = psres['cl_bis']
         clkg[x] = psres['clkg']
         dclkg[x] = psres['dclkg']
@@ -1005,20 +1146,70 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
         N_L_kappa[x] = psres['N_L']
         N_L_err_kappa[x] = psres['N_L_err']
 
+        if enable_lensing:
+            vprint(f'[sim {x}] computing cross-correlation with input kappa')
+            kappa_fourier = kappa_fourier_list[x]
+            f_kappa = f_kappa_list[x]
+            lC = psres['lC']
+
+            clkg_kappa_input[x], dclkg_kappa_input[x] = proc_clkg_with_kappa(
+                baseMap, dataFourier, kappa_fourier, f_kappa, kappa_amplitude,
+                lC, cl_fns, corr_facs, obs_map=obs_map, param_dict=param_dict, config_dict=config_dict)
+
+            if x == 0 and make_intermediate_plots:
+                fig = plt.figure(figsize=(6, 4))
+                lrange_clk = np.logspace(1, np.log10(2.*lMax), 100)
+                clk_input = f_kappa(lrange_clk) * kappa_amplitude
+
+                plt.loglog(lrange_clk, clk_input, linewidth=2.5, color='purple', label=f'Input $C_L^\\kappa$ (amp={kappa_amplitude})')
+                plt.errorbar(lC, clkg_kappa_input[x], fmt='o', color='red', markersize=5, capsize=2.5, label='$C_L^{\\hat{\\kappa}\\kappa_{input}}$ (QE)')
+                plt.xlabel('$L$', fontsize=14)
+                plt.ylabel('$C_L$', fontsize=14)
+                plt.grid(alpha=0.3)
+                plt.legend(fontsize=12)
+                plt.title('QE cross-correlation with input kappa')
+                save_current_plot(fig, "clkg_kappa_input", x, save_intermediate_plots=save_intermediate_plots, intermediate_plot_dir=intermediate_plot_dir)
+                plt.close()
+
+            vprint(f'[sim {x}] done with kappa cross-correlation')
+
+        kcorr_list.append(corr_facs['kcorr'])
+        vbeam_list.append(corr_facs['vbeam'])
+        unmask_frac_list.append(unmask_frac)
+        modefrac_list.append(corr_facs['modefrac'])
+
 
         # clkg[x] /= P_ell_sq(psres['lC'])
         # dclkg[x] /= P_ell_sq(psres['lC'])
         # cl_bis[x] /= P_ell_sq(psres['lC'])
 
         
-    res = {'clgg':clgg, 'clII':clII, 'cl_bis':cl_bis, 'clkg':clkg, 'dclkg':dclkg, 'lC':psres['lC'], 
-          'analytic_bias':analytic_bias, 'c_i_shot':c_i_shot, 'c_i2_g_shot':c_i2_g_shot, 'galshot':galshot, 
+    res = {'clgg':clgg, 'clII':clII, 'cl_bis':cl_bis, 'clkg':clkg, 'dclkg':dclkg, 'lC':psres['lC'],
+          'analytic_bias':analytic_bias, 'c_i_shot':c_i_shot, 'c_i2_g_shot':c_i2_g_shot, 'galshot':galshot,
           'N_L_kappa':N_L_kappa, 'N_L_err_kappa':N_L_err_kappa,
           'clkg_bias_predicted_2h': psres.get('clkg_bias_predicted_2h', None),
           'C_ell_II': psres.get('C_ell_II', None),
           'C_ell_gg': psres.get('C_ell_gg', None),
-          'C_ell_Ig': psres.get('C_ell_Ig', None)}
-    
+          'C_ell_Ig': psres.get('C_ell_Ig', None),
+          'kcorr': np.array(kcorr_list),
+          'vbeam': np.array(vbeam_list),
+          'unmask_frac': np.array(unmask_frac_list),
+          'modefrac': np.array(modefrac_list)}
+
+    # Add lensing information if applied
+    if enable_lensing:
+        res['enable_lensing'] = enable_lensing
+        res['kappa_amplitude'] = kappa_amplitude
+        res['kappa_seed'] = kappa_seed
+        res['clkg_kappa_input'] = clkg_kappa_input
+        res['dclkg_kappa_input'] = dclkg_kappa_input
+
+        if f_kappa_list:
+            lrange_clk = np.logspace(1, np.log10(2.*lMax), 100)
+            clk_input_spectrum = f_kappa_list[0](lrange_clk) * kappa_amplitude
+            res['lrange_clk'] = lrange_clk
+            res['clk_input_spectrum'] = clk_input_spectrum
+
     return res
 
 def compute_normalization(baseMap, lC, norm_Fourier):
@@ -1570,16 +1761,21 @@ def run_lens_recover(inst, nsim=5, scale_clkk=1.0, ifield_list=[4, 6, 7, 8], moc
                  **simres)
  
     
-    res = {'lC':lC, 'all_clx':all_clx, 'all_clxerr':all_clxerr, 'all_clkk':all_clkk, 'all_clkkerr':all_clkkerr, 'all_clkg':all_clkg, 
-          'all_clkgerr':all_clkgerr, 'all_clgg':all_clgg, 'all_clggerr':all_clggerr, 'all_clskew':all_clskew, 'all_clskewerr':all_clskewerr, 
-          'all_clII':all_clII, 'all_clIIerr':all_clIIerr, 'all_clkgbias':all_clkgbias, 
+    res = {'lC':lC, 'all_clx':all_clx, 'all_clxerr':all_clxerr, 'all_clkk':all_clkk, 'all_clkkerr':all_clkkerr, 'all_clkg':all_clkg,
+          'all_clkgerr':all_clkgerr, 'all_clgg':all_clgg, 'all_clggerr':all_clggerr, 'all_clskew':all_clskew, 'all_clskewerr':all_clskewerr,
+          'all_clII':all_clII, 'all_clIIerr':all_clIIerr, 'all_clkgbias':all_clkgbias,
           'all_clkgbias_WF':all_clkgbias_WF, 'all_clskew_WF':all_clskew_WF}
-    
+
     # Add N_L normalization to final results
     if all_N_L is not None:
         res['lC_norm'] = lC_norm_stored
         res['all_N_L'] = all_N_L
         res['all_N_L_err'] = all_N_L_err
-    
-    
+
+    # Add lensing information if applied
+    if enable_lensing:
+        res['enable_lensing'] = enable_lensing
+        res['kappa_amplitude'] = kappa_amplitude
+        res['kappa_seed'] = kappa_seed
+
     return res
