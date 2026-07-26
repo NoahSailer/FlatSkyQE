@@ -92,7 +92,7 @@ def plot_input_recovered_kappa(
 def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7], xlim=[300, 8e4],
                          ncol=1, bbox_to_anchor=[0.0, 1.3], legend_fs=10, loc=3, plot_ratio=False,
                          ylim_ratio=None, rat_min=0.05, rat_max=50, title_fs=16, suptitle=None, plot_sem=True,
-                         capsize=2.5, lMax=None, lMin=None, show=True):
+                         capsize=2.5, lMax=None, lMin=None, show=True, ylogscale=True):
     
     
     if res['clII'].shape[0] < 2:
@@ -186,7 +186,8 @@ def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7]
         plt.axvline(lMin, color='k', linestyle='solid')
 
     plt.xscale('log')
-    plt.yscale('log')
+    if ylogscale:
+        plt.yscale('log')
     plt.legend(ncol=ncol, bbox_to_anchor=bbox_to_anchor, fontsize=legend_fs, loc=loc)
     plt.xlim(xlim)
 
@@ -220,7 +221,8 @@ def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7]
         plt.axvline(lMin, color='k', linestyle='solid')
 
     plt.xscale('log')
-    plt.yscale('log')
+    if ylogscale:
+        plt.yscale('log')
     plt.legend(ncol=ncol, bbox_to_anchor=bbox_to_anchor, fontsize=legend_fs, loc=loc)
     plt.xlim(xlim)
 
@@ -244,7 +246,8 @@ def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7]
     plt.axhline(refclbis, label=ci2g_str, color='k', linestyle='dashed')
 
     plt.xscale('log')
-    plt.yscale('log')
+    if ylogscale:
+        plt.yscale('log')
     plt.legend(ncol=ncol, bbox_to_anchor=bbox_to_anchor, fontsize=legend_fs,  loc=loc)
     plt.xlim(xlim)
 
@@ -290,7 +293,7 @@ def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7]
             plt.plot(lC, y_dclkg, label=dclkg_label, color='b', marker='^', markersize=markersize)
 
     # If lensing was applied, show the input C_L^kappa spectrum
-    if res['enable_lensing']:
+    if 'enable_lensing' in res and res['enable_lensing']:
         from lensing_utils import build_kappa_power_spectrum
         kappa_amp = res.get('kappa_amplitude', 1.0)
         f_kappa = build_kappa_power_spectrum(ell_min=1, ell_max=2.*lC[-1], clkg_scale=1.0)
@@ -307,7 +310,8 @@ def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7]
     plt.xlabel('$L$', fontsize=14)
 
     plt.xscale('log')
-    plt.yscale('log')
+    if ylogscale:
+        plt.yscale('log')
     plt.legend(ncol=ncol, bbox_to_anchor=bbox_to_anchor, fontsize=legend_fs, loc=loc)
     # plt.xlim(300, 8e4)
     plt.xlim(xlim)

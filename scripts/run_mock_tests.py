@@ -38,6 +38,7 @@ DEFAULT_CONFIG = {
     "enable_lensing": False,
     "kappa_amplitude": 1.0,
     "kappa_seed": 12345,
+    "mode": "default",
 }
 
 
@@ -116,6 +117,7 @@ def _normalize_config_types(cfg: Dict[str, Any]) -> Dict[str, Any]:
     normalized["datestr"] = str(normalized["datestr"]).strip()
     normalized["res_root"] = str(normalized["res_root"]).strip()
     normalized["fig_root"] = str(normalized["fig_root"]).strip()
+    normalized["mode"] = str(normalized["mode"]).strip()
 
     normalized["kappa_amplitude"] = float(normalized["kappa_amplitude"])
     normalized["kappa_seed"] = int(normalized["kappa_seed"])
@@ -180,14 +182,14 @@ def _config_subdir(cfg: Dict[str, Any]) -> str:
     else:
         lensmode_tag = f"lens-{cfg['lensmode']}"
 
+    mode = cfg.get("mode", "default")
     tags = [
+        f"mode-{mode}",
         lensmode_tag,
         f"nbar-{_slugify_float(float(cfg['nbar']))}",
         psf_tag,
         "noise" if cfg["add_noise"] else "no-noise",
         "mask" if cfg["apply_mask"] else "no-mask",
-        "exactbeam" if cfg["exact_beam"] else "approxbeam",
-        "pixcorr" if cfg["pixel_fn_correct"] else "nopixcorr",
     ]
     return "_".join(tags)
 
@@ -226,6 +228,7 @@ def _resolve_config(args: argparse.Namespace) -> Dict[str, Any]:
         "datestr": args.datestr,
         "res_root": args.res_root,
         "fig_root": args.fig_root,
+        "mode": args.mode,
     }
 
     for key, value in overrides.items():
@@ -300,6 +303,7 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--datestr", type=str, default=None, help="Date string for output filenames")
     parser.add_argument("--res-root", type=str, default=None, help="Root directory for result files")
     parser.add_argument("--fig-root", type=str, default=None, help="Root directory for figure files")
+    parser.add_argument("--mode", type=str, default=None, help="Estimator mode (e.g., qe_kappa_ln_hardened)")
 
     parser.add_argument("--add-noise", dest="add_noise", action="store_true")
     parser.add_argument("--no-noise", dest="add_noise", action="store_false")
@@ -429,6 +433,10 @@ class TestSweepRunner:
                 enable_lensing=cfg["enable_lensing"],
                 kappa_amplitude=cfg["kappa_amplitude"],
                 kappa_seed=cfg["kappa_seed"],
+                mode=cfg["mode"],
+                add_foreground=cfg.get("add_foreground", False),
+                foreground_alpha=cfg.get("foreground_alpha", 2.0),
+                foreground_seed=cfg.get("foreground_seed", 12345),
             )
 
         if cfg["plot"]:
@@ -441,7 +449,7 @@ class TestSweepRunner:
             )
             suptitle += "\n$" + str(int(cfg["lmin"])) + "<\\ell<" + str(int(job.lmax)) + "$"
 
-            if cfg["enable_lensing"]:
+            if "enable_lensing" in cfg.keys() and cfg["enable_lensing"]:
                 print([k for k in res.keys()])
                 fig_in_out = plot_input_recovered_kappa(
                     res,
@@ -495,8 +503,11 @@ class TestSweepRunner:
             try:
                 saved_paths.append(self.run_single_test(job))
             except Exception as exc:  # noqa: BLE001
+                import traceback
                 failed_jobs.append(f"lMax={job.lmax}, psf={psf_label}: {exc}")
                 print("ERROR:", failed_jobs[-1])
+                print("\nFull traceback:")
+                traceback.print_exc()
 
         return {"saved": saved_paths, "failed": failed_jobs}
 

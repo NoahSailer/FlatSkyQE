@@ -823,6 +823,77 @@ class FlatMap(object):
 
       return dataFourier
 
+   def genGRF_rf(self, fCl, test=False, seed=None):
+      """
+      Generate a Gaussian random field with target isotropic power spectrum C_l
+      using the FlatMap Fourier conventions:
+
+         f(k) = ∫ d^2x e^{-ik·x} f(x)
+         f(x) = ∫ d^2k/(2π)^2 e^{ik·x} f(k)
+
+      and finite-box relation:
+         <|f_L|^2> = A * C_L,   A = sizeX*sizeY
+
+      Returns
+      -------
+      dataFourier : complex ndarray, shape (nX, nY//2+1)
+         rFFT half-plane coefficients consistent with a real map.
+      """
+      rng = np.random.default_rng(seed)
+
+      A = self.sizeX * self.sizeY
+
+      # Evaluate Cl on the rfft grid
+      Cl = np.array(list(map(fCl, self.l.flatten())), dtype=float).reshape(self.l.shape)
+      Cl = np.nan_to_num(Cl, nan=0.0, posinf=0.0, neginf=0.0)
+      Cl[Cl < 0] = 0.0
+
+      # Kill DC mode
+      Cl[0, 0] = 0.0
+
+      # Complex Gaussian z with E|z|^2 = 2
+      z = rng.normal(size=self.l.shape) + 1j * rng.normal(size=self.l.shape)
+
+      # Base scaling: var per complex mode = A * Cl
+      # Since E|z|^2=2, multiply by sqrt(A*Cl/2)
+      dataFourier = np.sqrt(A * Cl / 2.0) * z
+
+      # ky=0 line must be purely real for Hermitian symmetry of real map
+      # For purely real Gaussian g with var=1, need scale sqrt(A*Cl)
+      dataFourier[:, 0] = np.sqrt(A * Cl[:, 0]) * rng.normal(size=self.nX) + 0j
+
+      # If nY even, ky=Nyquist line also self-conjugate -> purely real
+      if (self.nY % 2) == 0:
+         dataFourier[:, -1] = np.sqrt(A * Cl[:, -1]) * rng.normal(size=self.nX) + 0j
+
+      # Enforce lx self-conjugate constraints on ky=0 (and Nyquist) lines:
+      # F[-ix, ky] = conj(F[ix, ky]); on these lines values are real, so equality.
+      # Index mapping for rfft storage: negative ix corresponds to nX-ix.
+      for ix in range(1, self.nX // 2):
+         jx = self.nX - ix
+         dataFourier[jx, 0] = dataFourier[ix, 0]
+         if (self.nY % 2) == 0:
+            dataFourier[jx, -1] = dataFourier[ix, -1]
+
+      # Special self-conjugate x-modes (ix=0 and Nyquist if nX even) must be real
+      dataFourier[0, 0] = np.real(dataFourier[0, 0]) + 0j
+      if (self.nX % 2) == 0:
+         dataFourier[self.nX // 2, 0] = np.real(dataFourier[self.nX // 2, 0]) + 0j
+         if (self.nY % 2) == 0:
+            dataFourier[0, -1] = np.real(dataFourier[0, -1]) + 0j
+            dataFourier[self.nX // 2, -1] = np.real(dataFourier[self.nX // 2, -1]) + 0j
+
+      if test:
+         # quick spectrum check
+         self.powerSpectrum(dataFourier=dataFourier, theory=[fCl], plot=True)
+         m = self.inverseFourier(dataFourier)
+         print("GRF mean =", np.mean(m), " std =", np.std(m))
+         self.plot(m)
+
+      return dataFourier
+
+
+
 
    def saveGRFMocks(self, fCl, nRand, directory=None, name=None):
       """create nRand GRF mock maps
@@ -4806,6 +4877,43 @@ class FlatMap(object):
       return resultFourier
 
 
+   def computeResponseKappaLNFFT(self, fC0, fCtot, fUln, lMin=1., lMax=1.e5, test=False, cache=None):
+      def doCalculation():
+         # iVar leg with LN template
+         def f1(l):
+               if (l < lMin) or (l > lMax):
+                  return 0.
+               v = divide(fUln(l), fCtot(l))
+               return 0. if not np.isfinite(v) else v
+
+         # WF-gradient leg
+         def f2(l):
+               if (l < lMin) or (l > lMax):
+                  return 0.
+               v = divide(fC0(l), fCtot(l))
+               v *= 1.j
+               return 0. if not np.isfinite(v) else v
+
+         iVarF = np.array(list(map(f1, self.l.flatten()))).reshape(self.l.shape)
+         WFF   = np.array(list(map(f2, self.l.flatten()))).reshape(self.l.shape)
+
+         iVar = self.inverseFourier(iVarF)
+
+         tx = self.inverseFourier(self.lx * WFF) * iVar
+         ty = self.inverseFourier(self.ly * WFF) * iVar
+
+         txF = self.fourier(tx) * divideArr(self.lx, self.lx**2 + self.ly**2) / 1.j
+         tyF = self.fourier(ty) * divideArr(self.ly, self.lx**2 + self.ly**2) / 1.j
+
+         RF = 2. * (txF + tyF)
+         RF = self.filterFourierIsotropic(lambda l: (l <= 2.*lMax), dataFourier=RF, test=False)
+         RF[np.where(np.isfinite(RF)==False)] = 0.
+         return RF
+
+      return doCalculation() if cache is None else doCalculation()
+
+
+
 
    def computeSNormalizationFFT(self, fCtot, lMin=1., lMax=1.e5, test=False, cache=None, sigma=0., u=None):
       '''calculate the normalization for S^2'''
@@ -4871,6 +4979,58 @@ class FlatMap(object):
             self.computeS2NormalizationFFT.cache[cache] = resultFourier.copy()
 
       return resultFourier
+   
+
+   def computeLNModNormalizationFFT(self, fCtot, fUln, lMin=1., lMax=1.e5, test=False, cache=None):
+      def doCalculation():
+         def f_iv(l):
+               if (l < lMin) or (l > lMax):
+                  return 0.
+               val = divide(fUln(l), fCtot(l))
+               return 0. if not np.isfinite(val) else val
+
+         W = np.array(list(map(f_iv, self.l.flatten()))).reshape(self.l.shape)
+         w = self.inverseFourier(W)
+
+         normF = 0.5 * self.fourier(w**2)
+         normF = self.filterFourierIsotropic(lambda l: (l <= 2.*lMax), dataFourier=normF, test=False)
+         normF = divideArr(1., normF)
+         normF[np.where(np.isfinite(normF)==False)] = 0.
+         return normF
+
+      return doCalculation() if cache is None else doCalculation()
+
+   def quadEstLNModNonNorm(self, fCtot, fUln, lMin=1., lMax=1.e5,
+                           dataFourier=None, dataFourier2=None, test=False):
+      """
+      Non-normalized LN-clustering modulation estimator.
+      fUln(l): LN template shape in ell-space (e.g. b1 * Cclus(l) * B_l^2).
+      """
+      if dataFourier is None:
+         dataFourier = self.dataFourier.copy()
+      if dataFourier2 is None:
+         dataFourier2 = dataFourier.copy()
+
+      def f_iv(l):
+         if (l < lMin) or (l > lMax):
+               return 0.
+         val = divide(fUln(l), fCtot(l))
+         return 0. if not np.isfinite(val) else val
+
+      A1 = self.filterFourierIsotropic(f_iv, dataFourier=dataFourier, test=test)
+      A2 = self.filterFourierIsotropic(f_iv, dataFourier=dataFourier2, test=test)
+
+      a1 = self.inverseFourier(A1)
+      a2 = self.inverseFourier(A2)
+
+      # local power / modulation field
+      m = a1 * a2
+      mF = 0.5 * self.fourier(m)
+
+      # optional: divide one external profile if you want same convention as S estimator
+      cut = lambda l: (l <= 2.*lMax)
+      mF = self.filterFourierIsotropic(cut, dataFourier=mF, test=False)
+      return mF
 
 
 
@@ -4928,7 +5088,6 @@ class FlatMap(object):
       return resultFourier
 
 
-
    def computeQuadEstSNorm(self, fCtot, lMin=1., lMax=1.e5, dataFourier=None, dataFourier2=None, path=None, test=False, cache=None, sigma=0., u=None):
       '''Returns the normalized quadratic estimator for S2 in Fourier space,
       and saves it to file if needed.
@@ -4944,34 +5103,244 @@ class FlatMap(object):
          self.saveDataFourier(resultFourier, path)
       return resultFourier
 
+   def computeQuadEstLNModNorm(self, fCtot, fUln, lMin=1., lMax=1.e5,
+                              dataFourier=None, dataFourier2=None,
+                              path=None, test=False, cache=None):
+      """Returns the normalized LN-modulation quadratic estimator in Fourier space.
+
+      Parameters
+      ----------
+      fCtot : function
+         Total observed power spectrum C_ell^tot.
+      fUln : function
+         LN modulation template u_LN(ell), e.g. C_ell^clus (optionally beam-weighted).
+      lMin, lMax : float
+         Multipole cuts on input modes.
+      dataFourier, dataFourier2 : array-like
+         Input Fourier maps (for split estimators; if None, uses self.dataFourier).
+      path : str or None
+         If not None, output FITS path.
+      """
+
+      # ---------- non-normalized LN modulation QE ----------
+      if dataFourier is None:
+         dataFourier = self.dataFourier.copy()
+      if dataFourier2 is None:
+         dataFourier2 = dataFourier.copy()
+
+      def fW(l):
+         if (l < lMin) or (l > lMax):
+            return 0.
+         val = divide(fUln(l), fCtot(l))
+         if not np.isfinite(val):
+            val = 0.
+         return val
+
+      WDataFourier1 = self.filterFourierIsotropic(fW, dataFourier=dataFourier, test=test)
+      WDataFourier2 = self.filterFourierIsotropic(fW, dataFourier=dataFourier2, test=test)
+
+      WData1 = self.inverseFourier(WDataFourier1)
+      WData2 = self.inverseFourier(WDataFourier2)
+
+      # local modulation proxy
+      prod = WData1 * WData2
+      nonNormFourier = 0.5 * self.fourier(prod)
+
+      # keep only reconstructible L
+      cut = lambda l: (l <= 2.*lMax)
+      nonNormFourier = self.filterFourierIsotropic(cut, dataFourier=nonNormFourier, test=False)
+
+      # ---------- normalization ----------
+      # reuse cached normalization if requested
+      normCacheKey = None
+      if cache is not None:
+         normCacheKey = str(cache) + "_LNMODNORM"
+
+      normFourier = self.computeLNModNormalizationFFT(
+         fCtot=fCtot, fUln=fUln, lMin=lMin, lMax=lMax, test=test, cache=normCacheKey
+      )
+
+      # normalized estimator
+      resultFourier = nonNormFourier * normFourier
+      resultFourier[np.where(np.isfinite(resultFourier)==False)] = 0.
+
+      if test:
+         print("Showing normalized LN modulation estimator (Fourier)")
+         self.plotFourier(resultFourier)
+
+      if path is not None:
+         self.saveDataFourier(resultFourier, path)
+
+      return resultFourier
 
 
-   def computeQuadEstKappaPointSourceHardenedNorm(self, fC0, fCtot, lMin=1., lMax=1.e5, dataFourier=None, dataFourier2=None, path=None, test=False, cache=None, sigma=0., u=None):
+   def computeQuadEstKappaPointSourceHardenedNorm(self, fC0, fCtot, lMin=1., lMax=1.e5, dataFourier=None, dataFourier2=None, path=None, test=False, cache=None, fUln=None):
       '''Returns the normalized bias hardened quadratic estimator for kappa in Fourier space,
       and saves it to file if needed.
       '''
       # minimum variance kappa estimator
       kappaMinVarFourier = self.computeQuadEstKappaNorm(fC0, fCtot, lMin=lMin, lMax=lMax, dataFourier=dataFourier, dataFourier2=dataFourier2, test=test, cache=cache)
       # minimum variance S2 estimator
-      SMinVarFourier = self.computeQuadEstSNorm(fCtot, lMin=lMin, lMax=lMax, dataFourier=dataFourier, dataFourier2=dataFourier2, test=test, cache=cache, sigma=sigma, u=u)
+      SMinVarFourier = self.computeQuadEstSNorm(fCtot, lMin=lMin, lMax=lMax, dataFourier=dataFourier, dataFourier2=dataFourier2, test=test, cache=cache, fUln=fUln)
       # normalization for phi
       NphiFourier = self.computeQuadEstPhiNormalizationFFT(fC0, fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache)
       # convert from phi to kappa
       NkappaFourier = 0.25 * self.l**4 * NphiFourier
       # normalization for S2
-      NSFourier = self.computeSNormalizationFFT(fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache, sigma=sigma, u=u)
+      NSFourier = self.computeSNormalizationFFT(fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache, fUln=fUln)
       # response
-      RFourier = self.computeResponseFFT(fC0, fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache, sigma=sigma, u=u)
+      RFourier = self.computeResponseFFT(fC0, fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache, fUln=fUln)
    
       # inverting the matrix {{1,a},{b,1}}
       a = NkappaFourier * RFourier
       b = NSFourier * RFourier
       determinant = 1. - (a * b)
+
+      # print('determinant is ', determinant)
       # invert the determinant
       invDeterminant = 1./determinant
       invDeterminant[np.where(np.isfinite(invDeterminant)==False)] = 0.
       # calculate the point source hardened estimator
       resultFourier = invDeterminant * (kappaMinVarFourier - a * SMinVarFourier)
+      # save to file if needed
+      if path is not None:
+         self.saveDataFourier(resultFourier, path)
+      return resultFourier
+
+
+   def computeQuadEstKappaLNHardenedNorm(self, fC0, fCtot, lMin=1., lMax=1.e5, dataFourier=None, dataFourier2=None, path=None, test=False, cache=None, fUln=None):
+      '''Returns the normalized bias hardened quadratic estimator for kappa in Fourier space,
+      and saves it to file if needed.
+      '''
+      # minimum variance kappa estimator
+      kappaMinVarFourier = self.computeQuadEstKappaNorm(fC0, fCtot, lMin=lMin, lMax=lMax, dataFourier=dataFourier, dataFourier2=dataFourier2, test=test, cache=cache)
+      # minimum variance S2 estimator
+      MMinVarFourier = self.computeQuadEstLNModNorm(fCtot, lMin=lMin, lMax=lMax, dataFourier=dataFourier, dataFourier2=dataFourier2, test=test, cache=cache, fUln=fUln)
+      # normalization for phi
+      NphiFourier = self.computeQuadEstPhiNormalizationFFT(fC0, fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache)
+      # convert from phi to kappa
+      NkappaFourier = 0.25 * self.l**4 * NphiFourier
+      # normalization for LN
+      NMFourier = self.computeLNModNormalizationFFT(fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache, fUln=fUln)
+      # response
+      RFourier = self.computeResponseKappaLNFFT(fC0, fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache, fUln=fUln)
+   
+      # inverting the matrix {{1,a},{b,1}}
+      a = NkappaFourier * RFourier
+      b = NMFourier * RFourier
+      determinant = 1. - (a * b)
+
+      print('determinant is ', determinant)
+
+      # DEBUG: Extract isotropic power and plot diagnostics
+      import matplotlib.pyplot as plt
+      where = (self.l.flatten() > 0.) * (self.l.flatten() < 2. * lMax)
+      L = self.l.flatten()[where]
+
+      N_kappa_L = np.real(NkappaFourier.flatten()[where])
+      N_M_L = np.real(NMFourier.flatten()[where])
+      R_L = np.real(RFourier.flatten()[where])
+      det_L = np.real(determinant.flatten()[where])
+      a_L = np.real(a.flatten()[where])
+      b_L = np.real(b.flatten()[where])
+
+      print(f"DEBUG: fUln is {fUln}")
+      print(f"DEBUG: N_M_L range: [{N_M_L.min()}, {N_M_L.max()}]")
+      print(f"DEBUG: R_L range: [{R_L.min()}, {R_L.max()}]")
+
+      fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+
+      ax = axes[0, 0]
+      ax.loglog(L, N_kappa_L, label='N_kappa(L)', color='blue')
+      ax.set_xlabel('L')
+      ax.set_ylabel('Power')
+      ax.set_title('Kappa normalization N_kappa(L)')
+      ax.grid(alpha=0.3)
+      ax.legend()
+
+      ax = axes[0, 1]
+      if fUln is not None:
+         ell_test = np.logspace(3, 5, 100)
+         try:
+            cib_clus = np.array([fUln(e) for e in ell_test])
+            ax.loglog(ell_test, cib_clus, label='cib_unlensed_auto_clus', color='darkgreen', linewidth=2)
+         except Exception as e:
+            ax.text(0.5, 0.5, f"Error evaluating fUln: {e}", ha='center', va='center')
+      else:
+         ax.text(0.5, 0.5, "fUln is None", ha='center', va='center', fontsize=12)
+      ax.set_xlabel('ell')
+      ax.set_ylabel('Power')
+      ax.set_title('Clustering spectrum fUln(ell)')
+      ax.grid(alpha=0.3)
+      ax.legend()
+
+      ax = axes[0, 2]
+      ax.loglog(L, N_M_L, label='N_M(L)', color='green')
+      ax.set_xlabel('L')
+      ax.set_ylabel('Power')
+      ax.set_title('LN mod normalization N_M(L)')
+      ax.grid(alpha=0.3)
+      ax.legend()
+
+      ax = axes[0, 3]
+      ax.loglog(L, R_L, label='R(L)', color='red')
+      ax.set_xlabel('L')
+      ax.set_ylabel('Response')
+      ax.set_title('Response R(L)')
+      ax.grid(alpha=0.3)
+      ax.legend()
+
+      ax = axes[1, 0]
+      ax.semilogx(L, det_L, label='determinant(L)', color='purple')
+      ax.axhline(1.0, color='k', linestyle='--', alpha=0.3)
+      ax.set_xlabel('L')
+      ax.set_ylabel('Determinant')
+      ax.set_title('Determinant = 1 - a*b')
+      ax.grid(alpha=0.3)
+      ax.legend()
+
+      ax = axes[1, 1]
+      ax.loglog(L, np.abs(a_L), label='|a| = N_kappa*R', color='orange')
+      ax.loglog(L, np.abs(b_L), label='|b| = N_M*R', color='brown')
+      ax.set_xlabel('L')
+      ax.set_ylabel('|a|, |b|')
+      ax.set_title('Matrix elements')
+      ax.grid(alpha=0.3)
+      ax.legend()
+
+      ax = axes[1, 2]
+      ax.loglog(L, np.abs(a_L * b_L), label='|a*b|', color='cyan')
+      ax.axhline(1.0, color='k', linestyle='--', alpha=0.3, label='threshold (det=0)')
+      ax.set_xlabel('L')
+      ax.set_ylabel('|a*b|')
+      ax.set_title('Product a*b (should be << 1 for stable inversion)')
+      ax.grid(alpha=0.3)
+      ax.legend()
+
+      ax = axes[1, 3]
+      try:
+         kappa_vals = np.abs(kappaMinVarFourier.flatten()[where])
+         M_vals = np.abs(MMinVarFourier.flatten()[where])
+         ax.loglog(L, kappa_vals, label='kappa estimator', color='blue', alpha=0.7)
+         ax.loglog(L, M_vals, label='M estimator', color='green', alpha=0.7)
+      except Exception as e:
+         ax.text(0.5, 0.5, f"Error: {type(kappaMinVarFourier).__name__}", ha='center', va='center')
+      ax.set_xlabel('L')
+      ax.set_ylabel('Power')
+      ax.set_title('Raw estimators (before hardening)')
+      ax.grid(alpha=0.3)
+      ax.legend()
+
+      plt.tight_layout()
+      plt.savefig('ln_hardened_diagnostics.png', dpi=150)
+      print("Saved diagnostic plot: ln_hardened_diagnostics.png")
+      plt.close()
+
+      # invert the determinant
+      invDeterminant = 1./determinant
+      invDeterminant[np.where(np.isfinite(invDeterminant)==False)] = 0.
+      # calculate the point source hardened estimator
+      resultFourier = invDeterminant * (kappaMinVarFourier - a * MMinVarFourier)
       # save to file if needed
       if path is not None:
          self.saveDataFourier(resultFourier, path)

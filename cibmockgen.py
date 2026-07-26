@@ -32,6 +32,30 @@ from ciber.theory.helgason_model import *
 from ciber.mocks.lognormal import *
 
 
+def genGRF_from_Cl(self, fCl, seed=None):
+    rng = np.random.default_rng(seed)
+    A = self.sizeX * self.sizeY
+
+    # full complex array shape for rfft grid
+    shape = self.l.shape
+    z = rng.normal(size=shape) + 1j * rng.normal(size=shape)
+
+    # enforce pure-real modes on self-conjugate lines (ky=0 and Nyquist if present)
+    z[:, 0] = rng.normal(size=self.nX) + 0j
+    if self.nY % 2 == 0:
+        z[:, -1] = rng.normal(size=self.nX) + 0j
+
+    Cl = np.array(fCl(self.l))
+    Cl = np.nan_to_num(Cl, nan=0.0, posinf=0.0, neginf=0.0)
+    Cl[self.l == 0] = 0.0
+
+    kfour = np.sqrt(0.5 * A * Cl) * z
+    kfour[:, 0] *= np.sqrt(2.0)
+    if self.nY % 2 == 0:
+        kfour[:, -1] *= np.sqrt(2.0)
+
+    return kfour
+
 def generate_cib_map(map_size=1024, n_cib_per_pixel=0.01, n_gal_per_pixel=0.01,
                      s_min=1.0, s_max=100.0, alpha=2.5, seed=42, mock_sim_fpath=False, fieldidx=0, ciber_inst=1, 
                      apply_mask=False, dx=None, dy=None, mu=None):
@@ -101,12 +125,15 @@ def generate_cib_map(map_size=1024, n_cib_per_pixel=0.01, n_gal_per_pixel=0.01,
             x_coords_lens = x_coords + dx[y_coords, x_coords]
             y_coords_lens = y_coords + dy[y_coords, x_coords]
 
-            # Magnify fluxes by magnification map
-            fluxes_lens = fluxes * mu[y_coords, x_coords]
-
             # Clip perturbed positions to map boundaries
             x_coords_lens = np.clip(x_coords_lens, 0, map_size - 1).astype(int)
             y_coords_lens = np.clip(y_coords_lens, 0, map_size - 1).astype(int)
+
+            # Magnify fluxes by magnification map evaluated at LENSED positions
+            fluxes_lens = fluxes * mu[y_coords_lens, x_coords_lens]
+
+            # fluxes_lens = fluxes * mu[y_coords, x_coords]
+
 
             x_coords = x_coords_lens
             y_coords = y_coords_lens

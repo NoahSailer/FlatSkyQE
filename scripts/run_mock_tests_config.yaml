@@ -17,7 +17,7 @@ lmax_range:
 psf_fwhm_range:
   - null
 
-nsim: 5
+nsim: 2
 pixel_fn_correct: false
 lensmode: unlensed
 nbar: 100000.0
@@ -33,10 +33,21 @@ save_intermediate_plots: true
 lmin: 10000.0
 N_CIB_PER_PIXEL: 0.2
 N_G_PER_PIXEL: 0.2
-alpha: 0.0
+alpha: 0.4
 skew_filter_mode: bandpass
 s_max: 10.0
 use_beam: true
+
+
+# add uncorrelated foregrounds to the CIB map. If true, the foregrounds are generated as a Gaussian random field with a power-law power spectrum (ell^-foreground_alpha).
+add_foreground: false
+# power-law exponent for foreground (ell^-alpha) power spectrum. Only used if add_foreground is true.
+foreground_alpha: 2.0
+foreground_seed: 12345
+
+
+mode: qe_kappa_ln_hardened
+# mode: qe_kappa_norm
 
 datestr: "111125"
 res_root: res
@@ -46,6 +57,6 @@ fig_root: figures
 # enable_lensing: Set to true to apply kappa-field lensing to the CIB map
 # kappa_amplitude: Scalar to tune the amplitude of the lensing power spectrum (default 1.0)
 # kappa_seed: Seed for reproducible kappa realizations (default 12345)
-enable_lensing: true
-kappa_amplitude: 5.0
+enable_lensing: false
+kappa_amplitude: 0.5
 kappa_seed: 12345

@@ -400,6 +400,10 @@ def calc_filters_and_corrections(clf, params, cfg):
         def obs_auto(ell):
             return cib_unlensed_auto(ell)*np.ones_like(ell)
 
+
+    def cib_unlensed_auto_clus(ell):
+        return cib_unlensed_auto(ell) - params['c_i_shot']*np.ones_like(ell)
+
     def W_ell(ell):
         return cib_unlensed_auto(ell)/obs_auto(ell)
 
@@ -412,7 +416,7 @@ def calc_filters_and_corrections(clf, params, cfg):
     print('vbeam is ', vbeam)
     print('mode frac is ', modefrac)
 
-    fns = {'obs_auto':obs_auto, 'cib_unlensed_auto':cib_unlensed_auto, 'W_ell':W_ell, 'P_ell_sq':P_ell_sq}
+    fns = {'obs_auto':obs_auto, 'cib_unlensed_auto':cib_unlensed_auto, 'cib_unlensed_auto_clus':cib_unlensed_auto_clus, 'W_ell':W_ell, 'P_ell_sq':P_ell_sq}
 
     facs = {'kcorr':kcorr, 'vbeam':vbeam, 'modefrac':modefrac}
 
@@ -420,7 +424,7 @@ def calc_filters_and_corrections(clf, params, cfg):
     
 
 def run_kappa_est(baseMap, ciber_unlensed_auto, ciber_obs_auto, params, dataFourier, dataFourier2=None, test=False, path=None, \
-                 mode='qe_kappa_norm', cut_lxly=False, fB_ell=None):
+                 mode='qe_kappa_norm', cut_lxly=False, fB_ell=None, sigma=0., u=1.0, fUln=None):
     
     if mode=='qe_kappa_norm':
         resultFourier, norm_Fourier = baseMap.computeQuadEstKappaNorm(ciber_unlensed_auto, ciber_obs_auto,
@@ -433,6 +437,24 @@ def run_kappa_est(baseMap, ciber_unlensed_auto, ciber_obs_auto, params, dataFour
                                                                 lMin=params['lMin'], lMax=params['lMax'],
                                                                 dataFourier=dataFourier, dataFourier2=dataFourier2,
                                                                 test=test, path=path, corr=True, cut_lxly=cut_lxly, fB_ell=fB_ell)
+
+    elif mode == 'qe_kappa_ps_hardened':
+        resultFourier = baseMap.computeQuadEstKappaPointSourceHardenedNorm(
+            ciber_unlensed_auto, ciber_obs_auto,
+            lMin=params['lMin'], lMax=params['lMax'],
+            dataFourier=dataFourier, dataFourier2=dataFourier2,
+            test=test, path=path, cache=None, sigma=sigma, u=u)
+        # hardened estimator has no single scalar normalization
+        norm_Fourier = None
+
+    elif mode == 'qe_kappa_ln_hardened':
+        resultFourier = baseMap.computeQuadEstKappaLNHardenedNorm(
+            ciber_unlensed_auto, ciber_obs_auto,
+            lMin=params['lMin'], lMax=params['lMax'],
+            dataFourier=dataFourier, dataFourier2=dataFourier2,
+            test=test, path=path, cache=None, fUln=fUln)
+        # hardened estimator has no single scalar normalization
+        norm_Fourier = None
         
     return resultFourier, norm_Fourier
 
