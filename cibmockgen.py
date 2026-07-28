@@ -1,4 +1,5 @@
 import flat_map
+from lensing_utils import lensing_kernel_weights
 import weight
 
 from flat_map import *
@@ -30,7 +31,7 @@ from ciber.io.ciber_data_utils import *
 from ciber.plotting.plotting_fns import plot_map
 from ciber.theory.helgason_model import *
 from ciber.mocks.lognormal import *
-
+from astropy.cosmology import FlatLambdaCDM
 
 def genGRF_from_Cl(self, fCl, seed=None):
     rng = np.random.default_rng(seed)
@@ -58,7 +59,7 @@ def genGRF_from_Cl(self, fCl, seed=None):
 
 def generate_cib_map(map_size=1024, n_cib_per_pixel=0.01, n_gal_per_pixel=0.01,
                      s_min=1.0, s_max=100.0, alpha=2.5, seed=42, mock_sim_fpath=False, fieldidx=0, ciber_inst=1, 
-                     apply_mask=False, dx=None, dy=None, mu=None):
+                     apply_mask=False, dx=None, dy=None, mu=None, m_max_cutsrc=None):
     """
     Generates a 2D CIB intensity map with Poisson-distributed point sources.
 
@@ -79,18 +80,62 @@ def generate_cib_map(map_size=1024, n_cib_per_pixel=0.01, n_gal_per_pixel=0.01,
 
     mask = np.ones((map_size, map_size))
     if mock_sim_fpath is not None:
+        print('loading from ', mock_sim_fpath)
         mock_dat = np.load(mock_sim_fpath, allow_pickle=True)
-        cib_map, kappa_map, total_signal,\
-             counts_map, tracer_cat = [mock_dat[key][fieldidx] for key in ['cib_maps', 'kappa_maps', 'total_signal', 'galdens', 'tracer_cats']]
-        if apply_mask:
-            mask = mock_dat['masks'][fieldidx]
 
-        print('tracer cat has shape ', tracer_cat.shape)
-        mags = tracer_cat[:,3]
+        # Handle two formats: multi-field (older) and single-field lensed mocks (new)
+        if 'cib_map' in mock_dat.files:
+            # New format: single-field lensed mocks (not indexed by fieldidx)
+            cib_map = mock_dat['cib_map']
+            # cib_map = mock_dat['cib_map_cut'] # temporary diagnostic 
 
-        cmock = ciber_mock()
+            tracer_cat = mock_dat['tracer_cat']
 
-        fluxes = np.array(cmock.mag_2_nu_Inu(mags, band=ciber_inst-1).value)
+            all_cib_mags = mock_dat['all_cib_mags']
+
+            ifield = mock_dat['ifield']
+
+            if m_max_cutsrc is not None:
+                print('')
+                cib_map_bright = make_cib_mock(ciber_inst, ifield, tracer_cat[tracer_cat[:,3]<m_max_cutsrc])
+                cib_map -= cib_map_bright
+
+                tracer_cat = tracer_cat[tracer_cat[:,3]>m_max_cutsrc]
+
+
+
+            # Create synthetic counts map from tracer catalog
+            counts_map = np.zeros((map_size, map_size))
+            x_coords = tracer_cat[:, 0].astype(int)
+            y_coords = tracer_cat[:, 1].astype(int)
+            x_coords = np.clip(x_coords, 0, map_size - 1)
+            y_coords = np.clip(y_coords, 0, map_size - 1)
+            np.add.at(counts_map, (y_coords, x_coords), 1.)
+
+            print('tracer cat has shape ', tracer_cat.shape)
+            mags = tracer_cat[:,3]
+
+            cmock = ciber_mock()
+
+            fluxes_cib = np.array(cmock.mag_2_nu_Inu(all_cib_mags, band=ciber_inst-1).value)
+            fluxes_g = np.array(cmock.mag_2_nu_Inu(mags, band=ciber_inst-1).value)
+
+            return cib_map, fluxes_cib, fluxes_g, counts_map, mask, m_max_cutsrc
+
+
+        else:
+            # Old format: multi-field mocks (indexed by fieldidx)
+            cib_map, kappa_map, total_signal,\
+                 counts_map, tracer_cat = [mock_dat[key][fieldidx] for key in ['cib_maps', 'kappa_maps', 'total_signal', 'galdens', 'tracer_cats']]
+            if apply_mask:
+                mask = mock_dat['masks'][fieldidx]
+
+            print('tracer cat has shape ', tracer_cat.shape)
+            mags = tracer_cat[:,3]
+
+            cmock = ciber_mock()
+
+            fluxes = np.array(cmock.mag_2_nu_Inu(mags, band=ciber_inst-1).value)
 
     
     else:
@@ -180,7 +225,6 @@ def make_cib_mock(inst, ifield, mock_cat, base_fluc_path='../data'):
     return bright_src_map
 
 
-
 def positions_from_counts(counts_map, cat_len=None, add_subpix_scatter=False):
 
     ''' Given a counts map, generate source catalog positions consistent with those counts. 
@@ -243,34 +287,53 @@ def counts_from_overdensity(overdensity_field, Ntot = 200000):
 
     return count_map
 
-def lensing_kernel_weights(z_s, z_bins):
-    chi_s = cosmo.comoving_distance(z_s).value  # Mpc
-    weights = []
+# def lensing_kernel_weights(z_s, z_bins):
+#     chi_s = cosmo.comoving_distance(z_s).value  # Mpc
+#     weights = []
 
-    for z in z_bins:
-        chi = cosmo.comoving_distance(z).value
-        a = 1.0 / (1 + z)
-        if chi >= chi_s:
-            weights.append(0.0)
-        else:
-            w = (chi / a) * (chi_s - chi) / chi_s
-            weights.append(w)
+#     for z in z_bins:
+#         chi = cosmo.comoving_distance(z).value
+#         a = 1.0 / (1 + z)
+#         if chi >= chi_s:
+#             weights.append(0.0)
+#         else:
+#             w = (chi / a) * (chi_s - chi) / chi_s
+#             weights.append(w)
     
-    prefac = (3/2) * (cosmo.H0.value / 3e5)**2 * cosmo.Om0  # in units of 1/Mpc^2
-    return prefac * np.array(weights)  
+#     prefac = (3/2) * (cosmo.H0.value / 3e5)**2 * cosmo.Om0  # in units of 1/Mpc^2
+#     return prefac * np.array(weights)  
 
 
-def combine_kappa_fields(grf_list, z_bins, z_s=2.0):
+# def combine_kappa_fields(grf_list, z_bins, z_s=2.0):
     
-    weights = lensing_kernel_weights(z_s, z_bins)  # shape [n_slices]
+#     weights = lensing_kernel_weights(z_s, z_bins)  # shape [n_slices]
 
-    weights /= np.sum(weights)
-    print('weights:', weights)
-    kappa_map = np.zeros_like(grf_list[0])
-    for delta_i, w_i in zip(grf_list, weights):
-        kappa_map += w_i * delta_i
+#     weights /= np.sum(weights)
+#     print('weights:', weights)
+#     kappa_map = np.zeros_like(grf_list[0])
+#     for delta_i, w_i in zip(grf_list, weights):
+#         kappa_map += w_i * delta_i
     
-    return kappa_map
+#     return kappa_map
+
+# def get_lensing_fields_from_kappa(kappa_map, fmap):
+#     kappaF = fmap.fourier(kappa_map)
+#     dx, dy = fmap.deflectionFromKappa(kappaF)   # in map-coordinate units used by FlatMap
+#     mu = 1.0 + 2.0 * kappa_map                  # weak-lensing magnification
+#     return dx, dy, mu
+
+# def lens_positions_periodic(x, y, dx, dy, nx, ny):
+#     # nearest-pixel sample of deflection at source locations
+#     ix = np.mod(np.floor(x).astype(int), nx)
+#     iy = np.mod(np.floor(y).astype(int), ny)
+
+#     x_l = x + dx[iy, ix]
+#     y_l = y + dy[iy, ix]
+
+#     # periodic wrap
+#     x_l = np.mod(x_l, nx)
+#     y_l = np.mod(y_l, ny)
+#     return x_l, y_l
 
 def sample_galaxy_positions(lognormal_field, n_galaxies, add_subpix_scatter=True):
     """
@@ -436,7 +499,7 @@ class galaxy_clus_gen():
         
     
     def generate_galaxy_catalog(self, ng_bins=8, size=1024, plot=False, lam_obs=None, mode=None, calc_weighted_kappa=False, \
-                               z_source=2.0, randomize_counts=False):
+                               z_source=2.0, randomize_counts=False, kappa_fac=1.0, apply_lensing_to_cat=False):
         
         ''' This function puts together other functions in the galaxy_catalog() class as full pipeline to generate galaxy catalog realizations,
         given some angular power spectrum and Helgason model'''
@@ -450,6 +513,12 @@ class galaxy_clus_gen():
         thetax, thetay, gal_z, mags, gal_app_mag, all_finezs = [[] for y in range(6)]
 
         all_kappa = np.zeros((len(midzs), self.Npix_side, self.Npix_side))
+
+        if apply_lensing_to_cat:
+            from lensing_utils import get_lensing_fields_from_kappa, lens_positions_periodic, combine_kappa_fields
+
+            fmap = FlatMap(nX=size, nY=size, sizeX=size*np.pi/180., sizeY=size*np.pi/180.)
+
         
         # loop over redshift
         for i, z in enumerate(midzs):
@@ -458,11 +527,11 @@ class galaxy_clus_gen():
             # assume we already have the limber cl files
             clfile = np.load(self.limber_basepath+'limber_cls_zmin='+str(self.zmin)+'_zmax='+str(self.zmax)+'_zbin'+str(i)+'.npz')
             ells, cl = clfile['lb_limber'], clfile['integral_cl']
+
+            # cl *= kappa_fac
             
             kappa_ln = self.gen_kappa_ln(cl, ells)
-            
-            all_kappa[i] = kappa_ln
-            
+            all_kappa[i] = kappa_ln * kappa_fac
             gal_overdensity = kappa_ln - 1. 
     
             if plot:
@@ -473,37 +542,71 @@ class galaxy_clus_gen():
             tx, ty = positions_from_counts(counts, add_subpix_scatter=True)
 
             if randomize_counts:
-
+                print('Randomizing source positions..')
                 tx = np.random.uniform(np.min(tx), np.max(tx), len(tx))
                 ty = np.random.uniform(np.min(ty), np.max(ty), len(ty))
-
-                # tx = tx[np.random.permutation(len(tx))]
-                # ty = ty[np.random.permutation(len(ty))]
-
-
-            thetax.extend(tx)
-            thetay.extend(ty)
             
             zeds, zfine = self.draw_redshifts(len(tx), zrange_grf[i], zrange_grf[i+1], Mabs)
-            gal_z.extend(zeds)
             
             all_finezs.extend(zfine)
             
             # draw apparent magnitudes based on Helgason number counts N(m)
             
             mapp_pdf = self.Adeg*number_counts[i].astype(float)/float(ntot_perz[i])
-            
             mapp_pdf /= np.sum(mapp_pdf)
             mag_draw = np.random.choice(Mapps, size=len(tx), p=mapp_pdf)
+
+            flux = 10**(-0.4*mag_draw)  # Convert magnitudes to fluxes (arbitrary units)
+
+            if apply_lensing_to_cat and i > 0:
+                print('Applying lensing to catalog slice' + str(i))
+    
+                z_s = midzs[i]  # source redshift for slice i (or whatever you intend)
+                w = lensing_kernel_weights(z_s, midzs)  # weights for each lens slice center
+
+                print('lensing kernel weights:', w)
+                kappa_fg = np.zeros_like(all_kappa[0])
+                for j in range(i):               # only foreground bins
+                    kappa_fg += w[j] * (all_kappa[j] - 1.0)
+
+
+                print("mu mean should be ~1:", np.mean(1+2*kappa_fg))
+
+
+                dx, dy, mu = get_lensing_fields_from_kappa(kappa_fg, fmap)
+
+                # kappa_fg = np.sum(all_kappa[:i], axis=0)
+                # dx, dy, mu = get_lensing_fields_from_kappa(kappa_fg, fmap)
+
+                tx_l, ty_l = lens_positions_periodic(tx, ty, dx, dy, size, size)
+
+                # for fluxes later:
+                mu_src = mu[np.mod(np.floor(ty_l).astype(int), size),
+                            np.mod(np.floor(tx_l).astype(int), size)]
+                flux_lensed = flux * mu_src  # Note: 'flux' should be defined earlier in the code
+
+                mag_draw = -2.5 * np.log10(flux_lensed)  # Convert back to magnitudes
+
+                thetax.extend(tx_l)
+                thetay.extend(ty_l)
+            else:
+                thetax.extend(tx)
+                thetay.extend(ty)
+
+            gal_z.extend(zeds)
             mags.extend(mag_draw)
 
+
+        print("mean(all_kappa[0]) =", np.mean(all_kappa[0]))
+        print("std(all_kappa[0]) =", np.std(all_kappa[0]))
+        print("mean(delta_0) =", np.mean(all_kappa[0]-1.0))
              
         print('min max gal z:', np.min(gal_z), np.max(gal_z))
         print('all galaxies:', np.sum(ntot_perz))
         if len(mags) > len(thetax):
             print('OHHHHHHHH')
-            idx_choice = np.sort(np.random.choice(np.arange(len(mags_list[cat])), len(thetax_list[cat]), replace=False))
-            mags_list[cat] = np.array(mags_list[cat])[idx_choice]
+            idx_choice = np.sort(np.random.choice(np.arange(len(mags)), len(thetax), replace=False))
+            mags = np.array(mags)[idx_choice]
 
         mock_cat = np.array([thetax, thetay, gal_z, mags]).transpose()
         
@@ -516,3 +619,67 @@ class galaxy_clus_gen():
         return mock_cat, all_kappa, comb_kappa, zrange_grf
 
 
+def gen_lensed_mocks(nset, inst, ifield_list=[4, 6, 7, 8], nbar_tracer=5e4, datestr='050725', Adeg=4., \
+                    m_min=17.0, m_max=27.0, m_max_tracer=25, m_max_cutsrc=20, randomize_counts=True, save_all_kappa=False, kappa_fac=0.5,
+                    tailstr=None, apply_lensing_to_cat=False):
+
+    from mock_lens_test import grab_nbar_tracer_cat
+    mock_fpath = '../data/lens_prods/mock_dat/'
+    
+    if not os.path.isdir(mock_fpath+datestr):
+        print('making directory')
+        os.makedirs(mock_fpath+datestr)
+        
+    band_dict = dict({1:'J', 2:'H'})
+    
+    band = band_dict[inst]
+    
+    gcg = galaxy_clus_gen(band=band, m_min=m_min, m_max=m_max)
+
+    for n in range(nset):
+        
+        for fieldidx, ifield in enumerate(ifield_list):
+        
+            mock_cat, all_kappa, comb_kappa, zrange_grf = gcg.generate_galaxy_catalog(calc_weighted_kappa=True, plot=False, 
+                                                                                     randomize_counts=randomize_counts, kappa_fac=kappa_fac, apply_lensing_to_cat=apply_lensing_to_cat)
+
+            cib_map = make_cib_mock(inst, ifield, mock_cat)
+
+            # make map with bright sources cut out to emulate perfect masking
+            cib_map_cut = make_cib_mock(inst, ifield, mock_cat[mock_cat[:,3]>m_max_cutsrc])
+
+            plot_map(cib_map, title='CIB mock map', figsize=(6, 6))
+            plot_map(cib_map_cut, title='CIB mock map (cut bright sources)', figsize=(6, 6))
+            plot_map(cib_map-cib_map_cut, title='CIB mock map (bright sources only)', figsize=(6, 6))
+
+            # restrict tracer to targeted selection
+            tracer_cat = mock_cat[mock_cat[:,3]<m_max_tracer]
+
+            # retain mags of all sources for later calculations
+            all_cib_mags = mock_cat[:,3]
+
+            # tracer_cat = grab_nbar_tracer_cat(mock_cat, Adeg=Adeg, nbar_targ=nbar_tracer)
+            
+            if randomize_counts:
+                headstr = 'randomized'
+            else:
+                if apply_lensing_to_cat:
+                    headstr = 'lensed'
+                else:
+                    headstr = 'unlensed'
+
+            save_fpath = mock_fpath+datestr+'/'+headstr+'_cib_mock_set'+str(n)+'_TM'+str(inst)+'_ifield'+str(ifield)+'_nbar='+str(nbar_tracer)+'.npz'
+
+            if tailstr is not None:
+                save_fpath = save_fpath.replace('.npz', '_'+tailstr+'.npz')
+            
+            print('saving to ', save_fpath)
+
+            if save_all_kappa:
+                kappa_save = all_kappa
+            else:
+                kappa_save = None
+            np.savez(save_fpath, \
+                    tracer_cat=tracer_cat, cib_map=cib_map, cib_map_cut=cib_map_cut, comb_kappa=comb_kappa, zrange=zrange_grf, nbar_tracer=nbar_tracer, 
+                    all_kappa=kappa_save, m_max_cutsrc=m_max_cutsrc, m_min=m_min, m_max=m_max, Adeg=Adeg, band=band, ifield=ifield, inst=inst, 
+                    all_cib_mags=all_cib_mags)

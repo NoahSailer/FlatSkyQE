@@ -364,52 +364,53 @@ class ciber_lens_forecast():
         
         
     def load_clx(self, clkg_scale=0.5):
-    
+
         # Load the new cl_kcmb_kgal.csv file
         parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         clx_fpath = os.path.join(parent_dir, 'data', 'cl_predictions', 'cl_kcmb_kgal.csv')
-        
+
         clx_data = np.loadtxt(clx_fpath, delimiter=',')
         lC, clx = clx_data[:, 0], clx_data[:, 1] * clkg_scale
-        
+
         # Fit power law slope between ell=1000 and ell=10000 for extrapolation
         fit_mask = (lC >= 1000) & (lC <= 10000)
         log_ell_fit = np.log10(lC[fit_mask])
         log_cl_fit = np.log10(clx[fit_mask])
-        
+
         # Linear fit in log space: log(Cl) = slope * log(ell) + intercept
         slope, intercept = np.polyfit(log_ell_fit, log_cl_fit, 1)
-        
-        # Create interpolation function with power law extrapolation
+
+        # Create smooth interpolation using cubic spline throughout data range
+        clx_interp = interp1d(lC, clx, kind='cubic', bounds_error=False, fill_value='extrapolate')
+
+        # Adjust intercept to match value at the data edge
+        ell_max = lC.max()
+        clx_edge = clx_interp(ell_max)
+        intercept_adj = np.log10(clx_edge) - slope * np.log10(ell_max)
+
         def clx_func(ell):
             result = np.zeros_like(ell, dtype=float)
-            
-            # Interpolate where we have data
-            within_range = (ell >= lC.min()) & (ell <= lC.max())
+
+            # Use cubic interpolation where we have data
+            within_range = (ell >= lC.min()) & (ell <= ell_max)
             if np.any(within_range):
-                interp = interp1d(lC, clx, kind='linear', bounds_error=False)
-                result[within_range] = interp(ell[within_range])
-            
-            # Extrapolate beyond data range using fitted power law
-            beyond_range = ell > lC.max()
+                result[within_range] = clx_interp(ell[within_range])
+
+            # Extrapolate beyond data range using power law (now continuous at boundary)
+            beyond_range = ell > ell_max
             if np.any(beyond_range):
-                result[beyond_range] = 10**(slope * np.log10(ell[beyond_range]) + intercept)
-            
-            # Below range (shouldn't happen but just in case)
+                result[beyond_range] = 10**(slope * np.log10(ell[beyond_range]) + intercept_adj)
+
+            # Below range using power law
             below_range = ell < lC.min()
             if np.any(below_range):
-                result[below_range] = 10**(slope * np.log10(ell[below_range]) + intercept)
-                
+                result[below_range] = 10**(slope * np.log10(ell[below_range]) + intercept_adj)
+
             return result
-        
-        # Use coarser sampling to avoid visual artifacts at transition points
-        lrange_coarse = self.lrange[::5]  # Sample every 5th element
-        clx_coarse = clx_func(lrange_coarse)
-        
-        # Interpolate back to full resolution
-        clx_smooth_interp = interp1d(lrange_coarse, clx_coarse, kind='cubic', bounds_error=False, fill_value='extrapolate')
-        self.clx = gaussian_smooth(np.abs(clx_smooth_interp(self.lrange)), 30)
-        
+
+        # Evaluate on full lrange with smooth extrapolation
+        self.clx = clx_func(self.lrange)
+
         print(f"Loaded C_L^kg with scale factor {clkg_scale:.2f}")
         print(f"Extrapolation power law: Cl ∝ ell^{slope:.3f} for ell > {lC.max():.0f}")
         
@@ -582,6 +583,8 @@ class ciber_lens_forecast():
             if self.bl is not None:
                 
                 blval = self.bl(self.lrange)
+
+                print('blval is ', blval)
                 
                 self.nlk_gauss /= blval**2
                 
@@ -1680,19 +1683,30 @@ def plot_integrated_snr_vs_survey_params(inst=1, ifield=4,
     else:
         # Generate Gaussian beam from FWHM
         # B(ℓ) = exp(-ℓ²σ²/2)
-        # σ_rad = FWHM_arcsec / (2*sqrt(2*ln(2))) * (π/180/3600)
+        # σ = FWHM / (2*sqrt(2*ln(2)))
         from scipy.interpolate import interp1d
-        
+
         fwhm_rad = psf_fwhm * np.pi / (180. * 3600.)  # Convert arcsec to radians
         sigma_rad = fwhm_rad / (2. * np.sqrt(2. * np.log(2.)))
-        
-        # Create beam function on clf.lrange
+
+        # Create beam: B(ell) = exp(-0.5 * (ell * sigma)^2)
+        # No clamping needed - let underflow happen naturally (becomes 0 which is correct)
         bl_array = np.exp(-0.5 * (clf.lrange * sigma_rad)**2)
-        
+
         # Store as interpolation function (like load_bl does)
-        clf.bl = interp1d(clf.lrange, bl_array, bounds_error=False, fill_value=(1., 0.))
-        print(f"Using Gaussian beam with FWHM = {psf_fwhm:.2f} arcsec (σ = {sigma_rad*180*3600/np.pi:.2f} arcsec)")
-    
+        clf.bl = interp1d(clf.lrange, bl_array, kind='cubic', bounds_error=False,
+                         fill_value=(1., bl_array[-1]))
+        sigma_arcsec = sigma_rad * 180. * 3600. / np.pi
+        print(f"Using Gaussian beam with FWHM = {psf_fwhm:.2f} arcsec (σ = {sigma_arcsec:.2f} arcsec)")
+
+
+        plt.figure()
+        plt.plot(clf.lrange, clf.bl(clf.lrange), label=f'Gaussian Beam (FWHM={psf_fwhm:.2f}" )')
+        plt.xscale('log')
+        plt.yscale('log')
+        plt.ylim(1e-4, 1.1)
+        plt.show()
+
     clf.load_clk()
     clf.load_clg(inst, catname=catname, galstr='hsc_i_lt_25.0_CIBERfidmask_zmax=1.0')
     clf.load_clx(clkg_scale=0.5)

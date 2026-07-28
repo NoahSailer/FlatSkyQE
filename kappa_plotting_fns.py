@@ -45,17 +45,31 @@ def plot_input_recovered_kappa(
     ):
     # Function body goes here
 
-
-    clk_input = np.mean(res['clkg_kappa_input'], axis=0)
-    kappa_amp = res['kappa_amplitude']
     lC = res['lC']
     refclkg = res['analytic_bias']
 
-    y_clkg, sem_clkg = np.mean(res['clkg_kappa_input'], axis=0), np.std(res['clkg_kappa_input'], axis=0, ddof=1)/np.sqrt(res['clkg_kappa_input'].shape[0])
-    y_dclkg, sem_dclkg = np.mean(res['dclkg_kappa_input'], axis=0), np.std(res['dclkg_kappa_input'], axis=0, ddof=1)/np.sqrt(res['dclkg_kappa_input'].shape[0])
-
-    clkg_label = '$C_{L}^{\\hat{\\kappa}\\kappa_{input}}$'
-    dclkg_label = '$C_{L}^{I^2\\kappa_{input}}$ (mocks)'
+    # Determine which kappa cross-spectrum to plot
+    if 'clkg_kappa_true' in res and res['clkg_kappa_true'].shape[0] > 0:
+        # Pre-lensed mocks with true kappa from comb_kappa
+        y_clkg = np.mean(res['clkg_kappa_true'], axis=0)
+        sem_clkg = np.std(res['clkg_kappa_true'], axis=0, ddof=1) / np.sqrt(res['clkg_kappa_true'].shape[0])
+        y_dclkg = np.mean(res['dclkg_kappa_true'], axis=0)
+        sem_dclkg = np.std(res['dclkg_kappa_true'], axis=0, ddof=1) / np.sqrt(res['dclkg_kappa_true'].shape[0])
+        clkg_label = '$C_{L}^{\\hat{\\kappa}\\kappa_{true}}$'
+        dclkg_label = '$C_{L}^{I^2\\kappa_{true}}$ (mocks)'
+        input_label = 'True $C_{L}^{\\kappa}$ (from mock)'
+        clk_input = None  # No analytical input spectrum for true kappa
+    else:
+        # Synthetic lensing with kappa_input from generated realization
+        clk_input = np.mean(res['clkg_kappa_input'], axis=0)
+        kappa_amp = res['kappa_amplitude']
+        y_clkg = np.mean(res['clkg_kappa_input'], axis=0)
+        sem_clkg = np.std(res['clkg_kappa_input'], axis=0, ddof=1) / np.sqrt(res['clkg_kappa_input'].shape[0])
+        y_dclkg = np.mean(res['dclkg_kappa_input'], axis=0)
+        sem_dclkg = np.std(res['dclkg_kappa_input'], axis=0, ddof=1) / np.sqrt(res['dclkg_kappa_input'].shape[0])
+        clkg_label = '$C_{L}^{\\hat{\\kappa}\\kappa_{input}}$'
+        dclkg_label = '$C_{L}^{I^2\\kappa_{input}}$ (mocks)'
+        input_label = f'Input $C_{{L}}^{{\\kappa}}$ (amp={kappa_amp})'
 
     print('y_dclkg:', y_dclkg)
 
@@ -67,9 +81,11 @@ def plot_input_recovered_kappa(
     else:
         plt.plot(lC, y_clkg, label=clkg_label, color='r', marker='x', markersize=markersize)
         plt.plot(lC, y_dclkg, label=dclkg_label, color='b', marker='^', markersize=markersize)
+
     # If lensing was applied, show the input C_L^kappa spectrum
-    print('clk input is ', clk_input)
-    plt.plot(lC, clk_input, label=f'Input $C_{{L}}^{{\\kappa}}$ (amp={kappa_amp})', color='purple', linewidth=2.5, linestyle='--', zorder=5)
+    if clk_input is not None:
+        print('clk input is ', clk_input)
+        plt.plot(lC, clk_input, label=input_label, color='purple', linewidth=2.5, linestyle='--', zorder=5)
 
     plt.axhline(refclkg, label='$\\Delta C_{L}^{\\kappa g}=\\Omega_{\\rm pix}C_{\\ell}^{I^2g}/2C_{\\ell}^{II}$', color='k', linestyle='dashed')
     if lMax is not None:
@@ -90,8 +106,8 @@ def plot_input_recovered_kappa(
 
 
 def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7], xlim=[300, 8e4],
-                         ncol=1, bbox_to_anchor=[0.0, 1.3], legend_fs=10, loc=3, plot_ratio=False,
-                         ylim_ratio=None, rat_min=0.05, rat_max=50, title_fs=16, suptitle=None, plot_sem=True,
+                         ncol=1, bbox_to_anchor=[0.0, 1.3], legend_fs=10, loc=1, plot_ratio=False,
+                         ylim_ratio=None, rat_min=0.01, rat_max=1000, title_fs=16, suptitle=None, plot_sem=True,
                          capsize=2.5, lMax=None, lMin=None, show=True, ylogscale=True):
     
     
@@ -125,7 +141,9 @@ def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7]
     
     refclii, refclbis, refclkg, refclgg = res['c_i_shot'], res['c_i2_g_shot'], res['analytic_bias'], res['galshot']
 
-    print('sem clbis:   ', sem_clbis)
+    print('clkg:', y_clkg)
+
+    # print('sem clbis:   ', sem_clbis)
     if plot_ratio:
         y_clII /= res['c_i_shot']
         y_clbis /= res['c_i2_g_shot']
@@ -190,8 +208,6 @@ def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7]
         plt.yscale('log')
     plt.legend(ncol=ncol, bbox_to_anchor=bbox_to_anchor, fontsize=legend_fs, loc=loc)
     plt.xlim(xlim)
-
-
 
     if ylim is None:
         ylim_plot = [rat_min*res['galshot'], rat_max*res['galshot']]
@@ -292,6 +308,17 @@ def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7]
             plt.plot(lC, y_clkg, label=clkg_label, color='r', marker='x', markersize=markersize)
             plt.plot(lC, y_dclkg, label=dclkg_label, color='b', marker='^', markersize=markersize)
 
+        if 'clg_kappa_true' in res and res['clg_kappa_true'].shape[0] > 0:
+            y_clg_kappa_true = np.mean(res['clg_kappa_true'], axis=0)
+            sem_clg_kappa_true = np.std(res['clg_kappa_true'], axis=0, ddof=1) / np.sqrt(res['clg_kappa_true'].shape[0])
+            if plot_ratio:
+                y_clg_kappa_true /= res['analytic_bias']
+                sem_clg_kappa_true /= res['analytic_bias']
+            if plot_sem:
+                plt.errorbar(lC, y_clg_kappa_true, yerr=sem_clg_kappa_true, label='$C_{L}^{g\\kappa_{true}}$ (gal x true)', color='g', marker='s', markersize=markersize, capsize=capsize)
+            else:
+                plt.plot(lC, y_clg_kappa_true, label='$C_{L}^{g\\kappa_{true}}$ (gal x true)', color='g', marker='s', markersize=markersize)
+
     # If lensing was applied, show the input C_L^kappa spectrum
     if 'enable_lensing' in res and res['enable_lensing']:
         from lensing_utils import build_kappa_power_spectrum
@@ -322,6 +349,8 @@ def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7]
     else:
         ylim_plot = ylim
     plt.ylim(ylim_plot)
+
+    # plt.ylim(1e-11, 1e-6)
 
 #     plt.tight_layout()
     if show:

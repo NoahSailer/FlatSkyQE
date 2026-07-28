@@ -13,6 +13,11 @@ from universe import *
 
 from scipy.integrate import quad
 
+parent_dir = os.path.abspath(os.path.join(os.getcwd(), ".."))
+sys.path.append(parent_dir)
+
+from ciber.mocks.cib_mocks import *
+
 
 def radial_bin(ell2d, W2d, ell_bins):
 	# Create histogram to bin ell2d and W2d 
@@ -23,7 +28,8 @@ def radial_bin(ell2d, W2d, ell_bins):
 	return W1d
 
 def calculate_analytic_bias(n_cib_per_pixel, n_g_per_pixel, 
-							fluxes_cib, fluxes_g, pix_area=1.0):
+							fluxes_cib, fluxes_g, pix_area=1.0, 
+							m_max_cutsrc=None, inst=1):
 	"""
 	Calculates the analytic self-lensing bias ΔC_L^{κg} in the Poisson limit
 	and trispectrum contributions to reconstruction noise.
@@ -52,6 +58,25 @@ def calculate_analytic_bias(n_cib_per_pixel, n_g_per_pixel,
 	"""
 	if len(fluxes_cib) == 0:
 		return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+	if m_max_cutsrc is not None:
+		print('Culling sources with mag <', m_max_cutsrc, 'for analytic bias calculation')
+		cmock = ciber_mock()
+		flux_min_cutsrc = np.array(cmock.mag_2_nu_Inu(m_max_cutsrc, band=inst-1).value)
+
+		mask_cib = (fluxes_cib < flux_min_cutsrc)
+		mask_g = (fluxes_g < flux_min_cutsrc)
+
+		frac_retain_cib = np.sum(mask_cib)/len(mask_cib)
+		frac_retain_g = np.sum(mask_g)/len(mask_g)
+
+		print('FRAC RETAIN CIB SOURCES = ', frac_retain_cib)
+		fluxes_cib = fluxes_cib[mask_cib]
+		fluxes_g = fluxes_g[mask_g]
+
+		n_cib_per_pixel *= frac_retain_cib
+		# n_g_per_pixel *= frac_retain_g
+
 		
 	# Calculate the second moment of the flux for all CIB sources
 	mean_s2_cib = np.mean(fluxes_cib**2)
