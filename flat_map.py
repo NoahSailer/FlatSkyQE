@@ -1447,8 +1447,8 @@ class FlatMap(object):
       should be called from a phi map
       d = grad phi
       """
-      dxFourier = 1j * phiMap.lx * phiFourier
-      dyFourier = 1j * phiMap.ly * phiFourier
+      dxFourier = 1j * self.lx * phiFourier
+      dyFourier = 1j * self.ly * phiFourier
       #
       dxFourier = np.nan_to_num(dxFourier)
       dyFourier = np.nan_to_num(dyFourier)
@@ -4891,6 +4891,7 @@ class FlatMap(object):
                if (l < lMin) or (l > lMax):
                   return 0.
                v = divide(fC0(l), fCtot(l))
+               v *= fUln(l)        # <-- ADD THIS (match point-source profile-in-both-legs)
                v *= 1.j
                return 0. if not np.isfinite(v) else v
 
@@ -4907,7 +4908,11 @@ class FlatMap(object):
 
          RF = 2. * (txF + tyF)
          RF = self.filterFourierIsotropic(lambda l: (l <= 2.*lMax), dataFourier=RF, test=False)
+         uL = fUln(self.l)
+         RF = divideArr(RF, uL)          # <-- mirror computeResponseFFT scaling
+
          RF[np.where(np.isfinite(RF)==False)] = 0.
+
          return RF
 
       return doCalculation() if cache is None else doCalculation()
@@ -4994,6 +4999,10 @@ class FlatMap(object):
 
          normF = 0.5 * self.fourier(w**2)
          normF = self.filterFourierIsotropic(lambda l: (l <= 2.*lMax), dataFourier=normF, test=False)
+
+         uL = fUln(self.l)
+         normF = divideArr(normF, uL**2)   # mirror computeSNormalizationFFT convention
+
          normF = divideArr(1., normF)
          normF[np.where(np.isfinite(normF)==False)] = 0.
          return normF
@@ -5150,6 +5159,10 @@ class FlatMap(object):
       cut = lambda l: (l <= 2.*lMax)
       nonNormFourier = self.filterFourierIsotropic(cut, dataFourier=nonNormFourier, test=False)
 
+      uL = fUln(self.l)
+      nonNormFourier = divideArr(nonNormFourier, uL)
+      nonNormFourier[np.where(np.isfinite(nonNormFourier)==False)] = 0.0
+
       # ---------- normalization ----------
       # reuse cached normalization if requested
       normCacheKey = None
@@ -5174,22 +5187,22 @@ class FlatMap(object):
       return resultFourier
 
 
-   def computeQuadEstKappaPointSourceHardenedNorm(self, fC0, fCtot, lMin=1., lMax=1.e5, dataFourier=None, dataFourier2=None, path=None, test=False, cache=None, fUln=None):
+   def computeQuadEstKappaPointSourceHardenedNorm(self, fC0, fCtot, lMin=1., lMax=1.e5, dataFourier=None, dataFourier2=None, path=None, test=False, cache=None, u=None, sigma=1.):
       '''Returns the normalized bias hardened quadratic estimator for kappa in Fourier space,
       and saves it to file if needed.
       '''
       # minimum variance kappa estimator
       kappaMinVarFourier = self.computeQuadEstKappaNorm(fC0, fCtot, lMin=lMin, lMax=lMax, dataFourier=dataFourier, dataFourier2=dataFourier2, test=test, cache=cache)
       # minimum variance S2 estimator
-      SMinVarFourier = self.computeQuadEstSNorm(fCtot, lMin=lMin, lMax=lMax, dataFourier=dataFourier, dataFourier2=dataFourier2, test=test, cache=cache, fUln=fUln)
+      SMinVarFourier = self.computeQuadEstSNorm(fCtot, lMin=lMin, lMax=lMax, dataFourier=dataFourier, dataFourier2=dataFourier2, test=test, cache=cache, u=u, sigma=sigma)
       # normalization for phi
       NphiFourier = self.computeQuadEstPhiNormalizationFFT(fC0, fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache)
       # convert from phi to kappa
       NkappaFourier = 0.25 * self.l**4 * NphiFourier
       # normalization for S2
-      NSFourier = self.computeSNormalizationFFT(fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache, fUln=fUln)
+      NSFourier = self.computeSNormalizationFFT(fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache, u=u, sigma=sigma)
       # response
-      RFourier = self.computeResponseFFT(fC0, fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache, fUln=fUln)
+      RFourier = self.computeResponseFFT(fC0, fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache, u=u, sigma=sigma)
    
       # inverting the matrix {{1,a},{b,1}}
       a = NkappaFourier * RFourier
@@ -5208,144 +5221,93 @@ class FlatMap(object):
       return resultFourier
 
 
-   def computeQuadEstKappaLNHardenedNorm(self, fC0, fCtot, lMin=1., lMax=1.e5, dataFourier=None, dataFourier2=None, path=None, test=False, cache=None, fUln=None):
-      '''Returns the normalized bias hardened quadratic estimator for kappa in Fourier space,
-      and saves it to file if needed.
-      '''
-      # minimum variance kappa estimator
-      kappaMinVarFourier = self.computeQuadEstKappaNorm(fC0, fCtot, lMin=lMin, lMax=lMax, dataFourier=dataFourier, dataFourier2=dataFourier2, test=test, cache=cache)
-      # minimum variance S2 estimator
-      MMinVarFourier = self.computeQuadEstLNModNorm(fCtot, lMin=lMin, lMax=lMax, dataFourier=dataFourier, dataFourier2=dataFourier2, test=test, cache=cache, fUln=fUln)
-      # normalization for phi
-      NphiFourier = self.computeQuadEstPhiNormalizationFFT(fC0, fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache)
-      # convert from phi to kappa
+   def computeQuadEstKappaLNHardenedNorm(self, fC0, fCtot, lMin=1., lMax=1.e5,
+                                       dataFourier=None, dataFourier2=None,
+                                       path=None, test=False, cache=None,
+                                       fUln=None, plot_diagnostics=True,
+                                       diag_outname='ln_hardened_diagnostics.png'):
+      """Returns normalized LN-bias-hardened kappa estimator in Fourier space."""
+
+
+      # minimum-variance kappa estimator
+      kappaMinVarFourier, _ = self.computeQuadEstKappaNorm(
+         fC0, fCtot, lMin=lMin, lMax=lMax,
+         dataFourier=dataFourier, dataFourier2=dataFourier2,
+         test=test, cache=cache
+      )
+
+      # minimum-variance LN modulation estimator
+      MMinVarFourier = self.computeQuadEstLNModNorm(
+         fCtot, lMin=lMin, lMax=lMax,
+         dataFourier=dataFourier, dataFourier2=dataFourier2,
+         test=test, cache=cache, fUln=fUln
+      )
+
+      # normalizations
+      NphiFourier = self.computeQuadEstPhiNormalizationFFT(
+         fC0, fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache
+      )
       NkappaFourier = 0.25 * self.l**4 * NphiFourier
-      # normalization for LN
-      NMFourier = self.computeLNModNormalizationFFT(fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache, fUln=fUln)
+
+      NMFourier = self.computeLNModNormalizationFFT(
+         fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache, fUln=fUln
+      )
       # response
-      RFourier = self.computeResponseKappaLNFFT(fC0, fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache, fUln=fUln)
-   
-      # inverting the matrix {{1,a},{b,1}}
-      a = NkappaFourier * RFourier
-      b = NMFourier * RFourier
-      determinant = 1. - (a * b)
+      RFourier = self.computeResponseKappaLNFFT(
+         fC0, fCtot, lMin=lMin, lMax=lMax, test=test, cache=cache, fUln=fUln
+      )
 
-      print('determinant is ', determinant)
+      a2D = NkappaFourier * RFourier
+      b2D = NMFourier * RFourier
+      det2D = 1. - (a2D * b2D)
 
-      # DEBUG: Extract isotropic power and plot diagnostics
-      import matplotlib.pyplot as plt
-      where = (self.l.flatten() > 0.) * (self.l.flatten() < 2. * lMax)
-      L = self.l.flatten()[where]
+      invDet2D = 1.0/det2D
+      invDet2D[~np.isfinite(invDet2D)] = 0.0
 
-      N_kappa_L = np.real(NkappaFourier.flatten()[where])
-      N_M_L = np.real(NMFourier.flatten()[where])
-      R_L = np.real(RFourier.flatten()[where])
-      det_L = np.real(determinant.flatten()[where])
-      a_L = np.real(a.flatten()[where])
-      b_L = np.real(b.flatten()[where])
+      resultFourier = invDet2D * (kappaMinVarFourier - a2D * MMinVarFourier)
 
-      print(f"DEBUG: fUln is {fUln}")
-      print(f"DEBUG: N_M_L range: [{N_M_L.min()}, {N_M_L.max()}]")
-      print(f"DEBUG: R_L range: [{R_L.min()}, {R_L.max()}]")
+      # 2x2 hardening matrix pieces
+      # a = NkappaFourier * RFourier
+      # b = NMFourier * RFourier
+      # determinant = 1. - (a * b)
 
-      fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+      if test:
+         print('determinant stats:',
+               np.nanmin(np.real(det2D)),
+               np.nanmax(np.real(det2D)))
 
-      ax = axes[0, 0]
-      ax.loglog(L, N_kappa_L, label='N_kappa(L)', color='blue')
-      ax.set_xlabel('L')
-      ax.set_ylabel('Power')
-      ax.set_title('Kappa normalization N_kappa(L)')
-      ax.grid(alpha=0.3)
-      ax.legend()
+      # optional diagnostics
+      if plot_diagnostics:
+         L, Nk_prof  = self.radial_average(NkappaFourier, lMin_plot=300, lMax_plot=2.*lMax, nBins=60)
+         _, NM_prof  = self.radial_average(NMFourier,     lMin_plot=300, lMax_plot=2.*lMax, nBins=60)
+         _, R_prof   = self.radial_average(RFourier,      lMin_plot=300, lMax_plot=2.*lMax, nBins=60)
+         _, a_prof   = self.radial_average(a2D,           lMin_plot=300, lMax_plot=2.*lMax, nBins=60)
+         _, b_prof   = self.radial_average(b2D,           lMin_plot=300, lMax_plot=2.*lMax, nBins=60)
+         _, det_prof = self.radial_average(det2D,         lMin_plot=300, lMax_plot=2.*lMax, nBins=60)
 
-      ax = axes[0, 1]
-      if fUln is not None:
-         ell_test = np.logspace(3, 5, 100)
-         try:
-            cib_clus = np.array([fUln(e) for e in ell_test])
-            ax.loglog(ell_test, cib_clus, label='cib_unlensed_auto_clus', color='darkgreen', linewidth=2)
-         except Exception as e:
-            ax.text(0.5, 0.5, f"Error evaluating fUln: {e}", ha='center', va='center')
-      else:
-         ax.text(0.5, 0.5, "fUln is None", ha='center', va='center', fontsize=12)
-      ax.set_xlabel('ell')
-      ax.set_ylabel('Power')
-      ax.set_title('Clustering spectrum fUln(ell)')
-      ax.grid(alpha=0.3)
-      ax.legend()
+         rho2 = a_prof * b_prof
+         print("rho2 min/max:", np.nanmin(rho2), np.nanmax(rho2))
 
-      ax = axes[0, 2]
-      ax.loglog(L, N_M_L, label='N_M(L)', color='green')
-      ax.set_xlabel('L')
-      ax.set_ylabel('Power')
-      ax.set_title('LN mod normalization N_M(L)')
-      ax.grid(alpha=0.3)
-      ax.legend()
+         fig_harden = self.plotLNHardeningDiagnostics(
+            fUln=fUln, L=L, N_kappa_L=Nk_prof, N_M_L=NM_prof, R_L=R_prof,
+            det_L=det_prof, a_L=a_prof, b_L=b_prof,
+            kappaMinVarFourier=kappaMinVarFourier, MMinVarFourier=MMinVarFourier,
+            lMax=lMax, outname=diag_outname, xlim=[300, lMax], figsize=(10, 7)
+         )
 
-      ax = axes[0, 3]
-      ax.loglog(L, R_L, label='R(L)', color='red')
-      ax.set_xlabel('L')
-      ax.set_ylabel('Response')
-      ax.set_title('Response R(L)')
-      ax.grid(alpha=0.3)
-      ax.legend()
+         # save_intermediate_plot()
 
-      ax = axes[1, 0]
-      ax.semilogx(L, det_L, label='determinant(L)', color='purple')
-      ax.axhline(1.0, color='k', linestyle='--', alpha=0.3)
-      ax.set_xlabel('L')
-      ax.set_ylabel('Determinant')
-      ax.set_title('Determinant = 1 - a*b')
-      ax.grid(alpha=0.3)
-      ax.legend()
+      # invert determinant
+      # invDeterminant = divideArr(1., det2D)
+      # invDeterminant[np.where(np.isfinite(invDeterminant)==False)] = 0.
 
-      ax = axes[1, 1]
-      ax.loglog(L, np.abs(a_L), label='|a| = N_kappa*R', color='orange')
-      ax.loglog(L, np.abs(b_L), label='|b| = N_M*R', color='brown')
-      ax.set_xlabel('L')
-      ax.set_ylabel('|a|, |b|')
-      ax.set_title('Matrix elements')
-      ax.grid(alpha=0.3)
-      ax.legend()
+      # # hardened estimator
+      # resultFourier = invDeterminant * (kappaMinVarFourier - a2D * MMinVarFourier)
 
-      ax = axes[1, 2]
-      ax.loglog(L, np.abs(a_L * b_L), label='|a*b|', color='cyan')
-      ax.axhline(1.0, color='k', linestyle='--', alpha=0.3, label='threshold (det=0)')
-      ax.set_xlabel('L')
-      ax.set_ylabel('|a*b|')
-      ax.set_title('Product a*b (should be << 1 for stable inversion)')
-      ax.grid(alpha=0.3)
-      ax.legend()
-
-      ax = axes[1, 3]
-      try:
-         kappa_vals = np.abs(kappaMinVarFourier.flatten()[where])
-         M_vals = np.abs(MMinVarFourier.flatten()[where])
-         ax.loglog(L, kappa_vals, label='kappa estimator', color='blue', alpha=0.7)
-         ax.loglog(L, M_vals, label='M estimator', color='green', alpha=0.7)
-      except Exception as e:
-         ax.text(0.5, 0.5, f"Error: {type(kappaMinVarFourier).__name__}", ha='center', va='center')
-      ax.set_xlabel('L')
-      ax.set_ylabel('Power')
-      ax.set_title('Raw estimators (before hardening)')
-      ax.grid(alpha=0.3)
-      ax.legend()
-
-      plt.tight_layout()
-      plt.savefig('ln_hardened_diagnostics.png', dpi=150)
-      print("Saved diagnostic plot: ln_hardened_diagnostics.png")
-      plt.close()
-
-      # invert the determinant
-      invDeterminant = 1./determinant
-      invDeterminant[np.where(np.isfinite(invDeterminant)==False)] = 0.
-      # calculate the point source hardened estimator
-      resultFourier = invDeterminant * (kappaMinVarFourier - a * MMinVarFourier)
-      # save to file if needed
       if path is not None:
          self.saveDataFourier(resultFourier, path)
-      return resultFourier
 
+      return resultFourier
 
 
    def forecastN0S(self, fCtot, lMin=1., lMax=1.e5, test=False, sigma=0., u=None):
@@ -6138,3 +6100,139 @@ class FlatMap(object):
       f = lambda l: np.exp(lnfln(np.log(np.maximum(l,lmin))))
       return f
  
+
+   def radial_average(self, field2d, lMin_plot=1., lMax_plot=None, nBins=40):
+      if lMax_plot is None:
+         lMax_plot = 2.*self.l.max()
+      ell = self.l.flatten()
+      f = np.real(field2d).flatten()
+
+      lEdges = np.logspace(np.log10(lMin_plot), np.log10(lMax_plot), nBins+1)
+      Lcen = 0.5*(lEdges[:-1] + lEdges[1:])
+      out = np.zeros(nBins)
+
+      for i in range(nBins):
+         m = (ell >= lEdges[i]) & (ell < lEdges[i+1])
+         out[i] = np.mean(f[m]) if np.any(m) else np.nan
+      return Lcen, out
+
+
+   def plotLNHardeningDiagnostics(self, fUln, L, N_kappa_L, N_M_L, R_L, det_L, a_L, b_L,
+                                 kappaMinVarFourier, MMinVarFourier, lMax,
+                                 outname='ln_hardened_diagnostics.png',
+                                 figsize=(20, 10), xlim=(300, 1e5), title_fs=16, lab_fs=14):
+      import matplotlib.pyplot as plt
+
+      fig, axes = plt.subplots(2, 3, figsize=figsize)
+
+      # (0,0) Nkappa
+      ax = axes[0, 0]
+      ax.loglog(L, N_kappa_L, label='$N_L^{\\kappa}$', color='blue')
+
+      ax.loglog(L, N_M_L, label='$N_L^{clus}$', color='green')
+      ax.set_title('Estimator normalization', fontsize=title_fs)
+
+      ax.set_xlabel('L', fontsize=lab_fs)
+      ax.set_ylabel('$C_L$', fontsize=lab_fs)
+      ax.grid(alpha=0.3)
+      ax.set_xlim(xlim)
+      ax.legend()
+
+      # (0,1) fUln template
+      ax = axes[0, 1]
+      if fUln is not None:
+         ell_test = L
+         try:
+            cib_clus = np.array([fUln(e) for e in ell_test])
+            ax.loglog(ell_test, cib_clus, label='$U(\\ell)$', color='darkgreen', linewidth=2)
+         except Exception as e:
+            ax.text(0.5, 0.5, f"Error evaluating fUln:\n{e}", ha='center', va='center', transform=ax.transAxes)
+      else:
+         ax.text(0.5, 0.5, "fUln is None", ha='center', va='center', fontsize=12, transform=ax.transAxes)
+      ax.set_xlabel('$\\ell$', fontsize=lab_fs)
+      ax.set_ylabel('$C_{\\ell}$', fontsize=lab_fs)
+      ax.set_title('Clustering template', fontsize=title_fs)
+      ax.grid(alpha=0.3)
+      ax.set_xlim(xlim)
+      ax.legend()
+
+      # (0,2) NM
+      # ax = axes[0, 2]
+      # ax.loglog(L, N_M_L, label='N_M(L)', color='green')
+      # ax.set_xlabel('L')
+      # ax.set_ylabel('Power')
+      # ax.set_title('LN mod normalization N_M(L)')
+      # ax.grid(alpha=0.3)
+      # ax.set_xlim(xlim)
+      # ax.legend()
+
+      # (0,3) R
+
+      rdef = '$\\mathcal{R}_L= \\int \\frac{d^2\ell}{(2\pi)^2} \\frac{f^{\\kappa}_{\\ell, L-\\ell}f_{\\ell, L-\\ell}^s}{2C_{\\ell}^{\\rm tot} C_{|L-\\ell|}^{\\rm tot}}$'
+
+      ax = axes[0, 2]
+      ax.loglog(L, np.abs(R_L), label=rdef, color='red')
+      ax.set_xlabel('$L$', fontsize=lab_fs)
+      ax.set_ylabel('$\\mathcal{R}_L$', fontsize=lab_fs)
+      # ax.set_title('Response R(L)', fontsize=title_fs)
+      ax.grid(alpha=0.3)
+      ax.set_xlim(xlim)
+      ax.legend(fontsize=14)
+
+      detlab = '$(1 - N_L^{\\kappa}N_L^S \\mathcal{R}_L^2)^{-1}$'
+      # (1,0) determinant
+      ax = axes[1, 0]
+      ax.semilogx(L, det_L, label=detlab, color='purple')
+      ax.axhline(1.0, color='k', linestyle='--', alpha=0.4)
+      ax.set_xlabel('$L$', fontsize=lab_fs)
+      ax.set_ylabel('Determinant', fontsize=lab_fs)
+      ax.grid(alpha=0.3)
+      ax.set_xlim(xlim)
+      ax.legend()
+
+      # (1,1) |a|, |b|
+      # ax = axes[1, 1]
+      # ax.loglog(L, np.abs(a_L), label='|a|=|N_L^{\\kappa} \\mathcal{R}_L|', color='orange')
+      # ax.loglog(L, np.abs(b_L), label='|b|=|N_L^{clus} \\mathcal{R}_L|', color='brown')
+      # ax.set_xlabel('L')
+      # ax.set_ylabel('|a|, |b|')
+      # ax.set_title('Matrix elements')
+      # ax.grid(alpha=0.3)
+      # ax.set_xlim(xlim)
+      # ax.legend()
+
+      # (1,2) |ab|
+      # ax = axes[1, 2]
+      # ax.loglog(L, np.abs(a_L * b_L), label='|a*b|', color='cyan')
+      # ax.axhline(1.0, color='k', linestyle='--', alpha=0.4, label='det=0 threshold')
+      # ax.set_xlabel('L')
+      # ax.set_ylabel('|a*b|')
+      # ax.set_title('Product a*b')
+      # ax.grid(alpha=0.3)
+      # ax.set_xlim(xlim)
+      # ax.legend()
+
+      # (1,3) raw estimators
+      ax = axes[1, 1]
+      try:
+         lC, kappa_vals, _ = self.powerSpectrum(dataFourier=kappaMinVarFourier, nBins=100, lRange=[1., 2.*lMax])
+         _, M_vals, _ = self.powerSpectrum(dataFourier=MMinVarFourier, nBins=100, lRange=[1., 2.*lMax])
+         ax.loglog(lC, np.abs(kappa_vals), label='$|\\hat{\\kappa}|$', color='blue', alpha=0.8)
+         ax.loglog(lC, np.abs(M_vals), label='$|\\hat{S}|$', color='green', alpha=0.8)
+      except Exception as e:
+         ax.text(0.5, 0.5, f"Estimator plot error:\n{e}", ha='center', va='center', transform=ax.transAxes)
+      ax.set_xlabel('L', fontsize=lab_fs)
+      ax.set_ylabel('Power', fontsize=lab_fs)
+      ax.set_title('Raw estimators', fontsize=title_fs)
+      ax.grid(alpha=0.3)
+      ax.set_xlim(xlim)
+      ax.legend()
+
+      
+
+      plt.tight_layout()
+      # plt.savefig(outname, dpi=150)
+      print("Saved diagnostic plot:", outname)
+      plt.close()
+
+      return fig

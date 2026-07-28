@@ -3,6 +3,8 @@ from universe import UnivPlanck15
 from halo_fit import Halofit
 from weight import WeightLensSingle
 from pn_2d import P2dAuto
+from astropy.cosmology import FlatLambdaCDM
+
 
 
 def build_kappa_power_spectrum(ell_min=100, ell_max=1e5, clkg_scale=1.0):
@@ -163,3 +165,62 @@ def generate_kappa_realization(baseMap, f_kappa, amplitude=1.0, seed=12345, test
     kappa_fourier = baseMap.genGRF_rf(f_kappa_scaled, test=test)
 
     return kappa_fourier
+
+
+def lensing_kernel_weights(z_s, z_bins):
+    cosmo = FlatLambdaCDM(H0=70, Om0=0.28)
+    chi_s = cosmo.comoving_distance(z_s).value  # Mpc
+    weights = []
+
+    for z in z_bins:
+        chi = cosmo.comoving_distance(z).value
+        a = 1.0 / (1 + z)
+        if chi >= chi_s:
+            weights.append(0.0)
+        else:
+            w = (chi / a) * (chi_s - chi) / chi_s
+            weights.append(w)
+    
+    prefac = (3/2) * (cosmo.H0.value / 3e5)**2 * cosmo.Om0  # in units of 1/Mpc^2
+    return prefac * np.array(weights)  
+
+
+# def combine_kappa_fields(grf_list, z_bins, z_s=2.0):
+    
+#     weights = lensing_kernel_weights(z_s, z_bins)  # shape [n_slices]
+
+#     weights /= np.sum(weights)
+#     print('weights:', weights)
+#     kappa_map = np.zeros_like(grf_list[0])
+#     for delta_i, w_i in zip(grf_list, weights):
+#         kappa_map += w_i * delta_i
+    
+#     return kappa_map
+
+def combine_kappa_fields(grf_list, z_bins, z_s=2.0):
+    weights = lensing_kernel_weights(z_s, z_bins)   # keep physical amplitude
+    kappa_map = np.zeros_like(grf_list[0])
+    for (one_plus_delta_i), w_i in zip(grf_list, weights):
+        delta_i = one_plus_delta_i - 1.0
+        delta_i = delta_i - np.mean(delta_i)
+        kappa_map += w_i * delta_i
+    return kappa_map
+
+def get_lensing_fields_from_kappa(kappa_map, fmap):
+    kappaF = fmap.fourier(kappa_map)
+    dx, dy = fmap.deflectionFromKappa(kappaF)   # in map-coordinate units used by FlatMap
+    mu = 1.0 + 2.0 * kappa_map                  # weak-lensing magnification
+    return dx, dy, mu
+
+def lens_positions_periodic(x, y, dx, dy, nx, ny):
+    # nearest-pixel sample of deflection at source locations
+    ix = np.mod(np.floor(x).astype(int), nx)
+    iy = np.mod(np.floor(y).astype(int), ny)
+
+    x_l = x + dx[iy, ix]
+    y_l = y + dy[iy, ix]
+
+    # periodic wrap
+    x_l = np.mod(x_l, nx)
+    y_l = np.mod(y_l, ny)
+    return x_l, y_l

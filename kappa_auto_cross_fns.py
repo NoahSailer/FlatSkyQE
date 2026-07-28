@@ -70,6 +70,7 @@ def build_param_dict(nX, nY, sizeX, sizeY, lMin, lMax, nBins, ciber_inst,
     }
     
     if mean_cl_sky is not None:
+        print('Setting c_i_shot to ', mean_cl_sky)
         param_dict['c_i_shot'] = mean_cl_sky
         
     return param_dict
@@ -448,11 +449,16 @@ def run_kappa_est(baseMap, ciber_unlensed_auto, ciber_obs_auto, params, dataFour
         norm_Fourier = None
 
     elif mode == 'qe_kappa_ln_hardened':
+
+        ell0 = 3000.
+        u0 = fUln(ell0)
+        fUln_norm = lambda l: fUln(l)/u0
+
         resultFourier = baseMap.computeQuadEstKappaLNHardenedNorm(
             ciber_unlensed_auto, ciber_obs_auto,
             lMin=params['lMin'], lMax=params['lMax'],
             dataFourier=dataFourier, dataFourier2=dataFourier2,
-            test=test, path=path, cache=None, fUln=fUln)
+            test=test, path=path, cache=None, fUln=fUln_norm)
         # hardened estimator has no single scalar normalization
         norm_Fourier = None
         

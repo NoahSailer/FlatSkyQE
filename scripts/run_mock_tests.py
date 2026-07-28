@@ -39,6 +39,10 @@ DEFAULT_CONFIG = {
     "kappa_amplitude": 1.0,
     "kappa_seed": 12345,
     "mode": "default",
+    "use_lensed_mocks": False,
+    "lensed_mock_datestr": None,
+    "nbar_tracer": 1.0e5,
+    "m_max_cutsrc": None,
 }
 
 
@@ -111,6 +115,7 @@ def _normalize_config_types(cfg: Dict[str, Any]) -> Dict[str, Any]:
     normalized["N_G_PER_PIXEL"] = float(normalized["N_G_PER_PIXEL"])
     normalized["alpha"] = float(normalized["alpha"])
     normalized["s_max"] = float(normalized["s_max"])
+    normalized["m_max_cutsrc"] = _coerce_optional_float(normalized["m_max_cutsrc"], "m_max_cutsrc")
 
     normalized["lensmode"] = str(normalized["lensmode"]).strip()
     normalized["skew_filter_mode"] = str(normalized["skew_filter_mode"]).strip()
@@ -133,8 +138,11 @@ def _normalize_config_types(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "use_beam",
         "save_intermediate_plots",
         "enable_lensing",
+        "use_lensed_mocks",
     ]:
         normalized[bool_key] = _coerce_bool(normalized[bool_key], bool_key)
+
+    normalized["nbar_tracer"] = float(normalized["nbar_tracer"])
 
     return normalized
 
@@ -191,6 +199,8 @@ def _config_subdir(cfg: Dict[str, Any]) -> str:
         "noise" if cfg["add_noise"] else "no-noise",
         "mask" if cfg["apply_mask"] else "no-mask",
     ]
+    if cfg["m_max_cutsrc"] is not None:
+        tags.append(f"mcut-{_slugify_float(cfg['m_max_cutsrc'])}")
     return "_".join(tags)
 
 
@@ -209,6 +219,8 @@ def _build_resname(cfg: Dict[str, Any], lmax: float, psf_pix_fwhm: Optional[floa
         resname += "_exactbeam"
     if cfg["pixel_fn_correct"]:
         resname += "_wpixcorr"
+    if cfg["m_max_cutsrc"] is not None:
+        resname += f"_mcut{_slugify_float(cfg['m_max_cutsrc'])}"
     return resname
 
 
@@ -229,6 +241,7 @@ def _resolve_config(args: argparse.Namespace) -> Dict[str, Any]:
         "res_root": args.res_root,
         "fig_root": args.fig_root,
         "mode": args.mode,
+        "m_max_cutsrc": args.m_max_cutsrc,
     }
 
     for key, value in overrides.items():
@@ -260,6 +273,14 @@ def _resolve_config(args: argparse.Namespace) -> Dict[str, Any]:
         cfg["kappa_amplitude"] = args.kappa_amplitude
     if args.kappa_seed is not None:
         cfg["kappa_seed"] = args.kappa_seed
+    if args.use_lensed_mocks is not None:
+        cfg["use_lensed_mocks"] = args.use_lensed_mocks
+    if args.lensed_mock_datestr is not None:
+        cfg["lensed_mock_datestr"] = args.lensed_mock_datestr
+    if args.nbar_tracer is not None:
+        cfg["nbar_tracer"] = args.nbar_tracer
+    if args.m_max_cutsrc is not None:
+        cfg["m_max_cutsrc"] = args.m_max_cutsrc
 
     return _normalize_config_types(cfg)
 
@@ -303,7 +324,7 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--datestr", type=str, default=None, help="Date string for output filenames")
     parser.add_argument("--res-root", type=str, default=None, help="Root directory for result files")
     parser.add_argument("--fig-root", type=str, default=None, help="Root directory for figure files")
-    parser.add_argument("--mode", type=str, default=None, help="Estimator mode (e.g., qe_kappa_ln_hardened)")
+    parser.add_argument("--mode", type=str, default=None, help="Estimator mode (e.g., qe_kappa_norm)")
 
     parser.add_argument("--add-noise", dest="add_noise", action="store_true")
     parser.add_argument("--no-noise", dest="add_noise", action="store_false")
@@ -347,6 +368,18 @@ def _make_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--kappa-amplitude", type=float, default=None, help="Lensing kappa amplitude scalar (default 1.0)")
     parser.add_argument("--kappa-seed", type=int, default=None, help="Seed for kappa realization (default 12345)")
+
+    parser.add_argument("--use-lensed-mocks", dest="use_lensed_mocks", action="store_true")
+    parser.add_argument("--no-use-lensed-mocks", dest="use_lensed_mocks", action="store_false")
+    parser.set_defaults(use_lensed_mocks=None)
+
+    parser.add_argument("--lensed-mock-datestr", type=str, default=None,
+                       help="Date string for pre-lensed mock files (e.g., 072726)")
+    parser.add_argument("--nbar-tracer", type=float, default=None,
+                       help="Number density for tracer galaxies in lensed mocks")
+
+    parser.add_argument("--m-max-cutsrc", type=float, default=None,
+                       help="Maximum magnitude cutoff for sources (brighter than this removed from intensity map)")
 
     parser.add_argument("--dry-run", action="store_true", help="Print resolved config and planned jobs")
     return parser
@@ -437,6 +470,10 @@ class TestSweepRunner:
                 add_foreground=cfg.get("add_foreground", False),
                 foreground_alpha=cfg.get("foreground_alpha", 2.0),
                 foreground_seed=cfg.get("foreground_seed", 12345),
+                use_lensed_mocks=cfg["use_lensed_mocks"],
+                lensed_mock_datestr=cfg["lensed_mock_datestr"],
+                nbar_tracer=cfg["nbar_tracer"],
+                m_max_cutsrc=cfg.get("m_max_cutsrc", None),
             )
 
         if cfg["plot"]:
@@ -449,23 +486,34 @@ class TestSweepRunner:
             )
             suptitle += "\n$" + str(int(cfg["lmin"])) + "<\\ell<" + str(int(job.lmax)) + "$"
 
-            if "enable_lensing" in cfg.keys() and cfg["enable_lensing"]:
-                print([k for k in res.keys()])
-                fig_in_out = plot_input_recovered_kappa(
-                    res,
-                    bbox_to_anchor=None,
-                    ncol=1,
-                    ylim=None,
-                    figsize=(6, 5),
-                    markersize=5,
-                    legend_fs=10,
-                    xlim=[100, 1.0e5],
-                    loc=3,
-                    lMax=job.lmax,
-                    lMin=cfg["lmin"],
-                )
-                fig_fpath = os.path.join(self.fig_dir, f"{resname}_{cfg['datestr']}_nbar{cfg['nbar']}_kappa_recover.png")
-                fig_in_out.savefig(fig_fpath, dpi=200)
+            if ("enable_lensing" in cfg.keys() and cfg["enable_lensing"]) or cfg["use_lensed_mocks"]:
+                print('Plotting lensing results...')
+                print(f'  enable_lensing={cfg.get("enable_lensing", False)}')
+                print(f'  use_lensed_mocks={cfg["use_lensed_mocks"]}')
+                print(f'  Keys in res: {[k for k in res.keys()]}')
+                has_clkg_kappa_input = 'clkg_kappa_input' in res and res['clkg_kappa_input'].shape[0] > 0
+                has_clkg_kappa_true = 'clkg_kappa_true' in res and res['clkg_kappa_true'].shape[0] > 0
+                print(f'  has_clkg_kappa_input={has_clkg_kappa_input}')
+                print(f'  has_clkg_kappa_true={has_clkg_kappa_true}')
+
+                if has_clkg_kappa_input or has_clkg_kappa_true:
+                    fig_in_out = plot_input_recovered_kappa(
+                        res,
+                        bbox_to_anchor=None,
+                        ncol=1,
+                        ylim=None,
+                        figsize=(6, 5),
+                        markersize=5,
+                        legend_fs=10,
+                        xlim=[100, 1.0e5],
+                        loc=3,
+                        lMax=job.lmax,
+                        lMin=cfg["lmin"],
+                    )
+                    fig_fpath = os.path.join(self.fig_dir, f"{resname}_{cfg['datestr']}_nbar{cfg['nbar']}_kappa_recover.png")
+                    fig_in_out.savefig(fig_fpath, dpi=200)
+                else:
+                    print('  WARNING: No kappa cross-spectra available to plot')
 
             fig = plot_recov_components(
                 res,
@@ -476,11 +524,12 @@ class TestSweepRunner:
                 markersize=5,
                 legend_fs=10,
                 xlim=[100, 1.0e5],
-                loc=3,
+                loc=1,
                 suptitle=suptitle,
                 lMax=job.lmax,
                 lMin=cfg["lmin"],
                 show=False,
+                ylogscale=True
             )
             fig_fpath = os.path.join(self.fig_dir, f"{resname}_{cfg['datestr']}_nbar{cfg['nbar']}.png")
             fig.savefig(fig_fpath, dpi=200)

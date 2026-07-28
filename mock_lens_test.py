@@ -850,8 +850,10 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
                          save_intermediate_plots=False,
                          intermediate_plot_dir=None,
                          enable_lensing=False, kappa_amplitude=1.0, kappa_seed=12345,
-                         mode='qe_kappa_norm', 
-                         add_foreground=False, foreground_alpha=2.0, foreground_seed=12345):
+                         mode='qe_kappa_norm',
+                         add_foreground=False, foreground_alpha=2.0, foreground_seed=12345,
+                         use_lensed_mocks=False, lensed_mock_datestr=None, nbar_tracer=1e5, 
+                         m_max_cutsrc=None):
 
     def vprint(*args, level=1, **kwargs):
         if verbose >= level:
@@ -884,9 +886,12 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
             N_L_kappa, N_L_err_kappa = [np.zeros((nsim, 50)) for _ in range(9)]
 
     clkg_kappa_input, dclkg_kappa_input = [np.zeros((nsim, 50)) for _ in range(2)]
+    clkg_kappa_true, dclkg_kappa_true = [np.zeros((nsim, 50)) for _ in range(2)]
+    clg_kappa_true = np.zeros((nsim, 50))
 
     kcorr_list, vbeam_list, unmask_frac_list, modefrac_list = [], [], [], []
     kappa_fourier_list, f_kappa_list = [], []
+    kappa_true_fourier_list = []
     
     param_dict['pixel_size_arcsec'] = 3600.*(sizeX/MAP_SIZE)
     vprint('pixel size:', param_dict['pixel_size_arcsec'])
@@ -905,18 +910,46 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
         B_ell_fn = None
         clf.bl = lambda ell: np.ones_like(ell)  # Unity beam
 
+    vprint(f"DEBUG: use_lensed_mocks={use_lensed_mocks}, lensed_mock_datestr={lensed_mock_datestr}, nbar_tracer={nbar_tracer}", level=0)
+
     for x in range(nsim):
 
         vprint(f"\n--- [sim {x+1}/{nsim}] starting ---", level=1)
 
         simidx = x % n_cib_sim
-        if grab_cib_sim:
+        kappa_true_map = None
+        mock_sim_fpath = None
+
+        # Load from pre-lensed mocks with comb_kappa (new format)
+        if use_lensed_mocks:
+            if lensed_mock_datestr is None:
+                raise ValueError("lensed_mock_datestr required when use_lensed_mocks=True")
+            basedir = '../data/lens_prods/mock_dat/'+lensed_mock_datestr
+            # Format: lensed_cib_mock_set{simidx}_TM{ciber_inst}_ifield{ifield}_nbar={nbar_tracer}.npz
+            mock_sim_fpath = basedir + f'/lensed_cib_mock_set{simidx}_TM{ciber_inst}_ifield{ifield}_nbar={nbar_tracer:.1f}.npz'
+
+            if os.path.exists(mock_sim_fpath):
+                vprint(f'[sim {x}] loading pre-lensed mock from {mock_sim_fpath}')
+                mock_dat = np.load(mock_sim_fpath, allow_pickle=True)
+                if 'comb_kappa' in mock_dat.files:
+                    kappa_true_map = mock_dat['comb_kappa']
+                    vprint(f'[sim {x}] loaded true kappa from mock, shape={kappa_true_map.shape}')
+            else:
+                raise FileNotFoundError(f"Lensed mock not found: {mock_sim_fpath}")
+
+        # Load from generated mocks with old format (backward compatibility)
+        elif grab_cib_sim:
             tmdir = '../data/lens_prods/mock_dat/'+datestr+'/TM'+str(ciber_inst)
             mock_sim_fpath = tmdir+ '/mock_dat_'+lensmode+'_'+mockstr+'_simidx'+str(simidx)+'.npz'
-        else:
-            mock_sim_fpath = None
 
-        vprint('[sim %d] loading from ' % x, mock_sim_fpath)
+            if os.path.exists(mock_sim_fpath):
+                vprint(f'[sim {x}] loading generated mock from {mock_sim_fpath}')
+                mock_dat = np.load(mock_sim_fpath, allow_pickle=True)
+                if 'comb_kappa' in mock_dat.files:
+                    kappa_true_map = mock_dat['comb_kappa']
+                    vprint(f'[sim {x}] loaded true kappa from mock, shape={kappa_true_map.shape}')
+        else:
+            vprint('[sim %d] no mock source specified' % x)
 
         if enable_lensing:
             vprint(f'[sim {x}] generating kappa realization with amplitude={kappa_amplitude}, seed={kappa_seed}')
@@ -932,11 +965,24 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
 
         # This map represents the true sky intensity I(x, y)
         # Always generate unlensed map for comparison
-        cib_intensity_map_unlensed, all_cib_fluxes, counts_map, mask = generate_cib_map(
-            map_size=MAP_SIZE,
-            n_cib_per_pixel=N_CIB_PER_PIXEL, n_gal_per_pixel=N_G_PER_PIXEL,
-            seed=None, s_max=s_max,
-        mock_sim_fpath=mock_sim_fpath, apply_mask=apply_mask)
+        # cib_intensity_map_unlensed, all_cib_fluxes, counts_map, mask = generate_cib_map(
+        #     map_size=MAP_SIZE,
+        #     n_cib_per_pixel=N_CIB_PER_PIXEL, n_gal_per_pixel=N_G_PER_PIXEL,
+        #     seed=None, s_max=s_max,
+        # mock_sim_fpath=mock_sim_fpath, apply_mask=apply_mask)
+
+        cib_intensity_map_unlensed, all_cib_fluxes, \
+            all_g_fluxes, counts_map,\
+                mask, m_max_cutsrc = generate_cib_map(
+                                            map_size=MAP_SIZE,
+                                            n_cib_per_pixel=N_CIB_PER_PIXEL,
+                                            n_gal_per_pixel=N_G_PER_PIXEL,
+                                            seed=None, s_max=s_max,
+                                            mock_sim_fpath=mock_sim_fpath,
+                                            apply_mask=apply_mask, 
+                                            m_max_cutsrc=m_max_cutsrc)
+
+
 
         if enable_lensing:
             cib_intensity_map, _, _, _ = generate_cib_map(
@@ -1042,9 +1088,11 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
 
         
         if grab_cib_sim:
-            N_G_PER_PIXEL = len(all_cib_fluxes)/MAP_SIZE**2
+            N_G_PER_PIXEL = len(all_g_fluxes)/MAP_SIZE**2
             N_CIB_PER_PIXEL = len(all_cib_fluxes)/MAP_SIZE**2
-            galaxy_fluxes = all_cib_fluxes.copy()
+
+            print('N_G_PER_PIXEL:', N_G_PER_PIXEL, 'N_CIB_PER_PIXEL:', N_CIB_PER_PIXEL)
+            galaxy_fluxes = all_g_fluxes.copy()
             
         else:
             n_cib_total = len(all_cib_fluxes)
@@ -1061,7 +1109,8 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
             n_g_per_pixel=N_G_PER_PIXEL,
             fluxes_cib=all_cib_fluxes,
             fluxes_g=galaxy_fluxes,
-            pix_area=Apix
+            pix_area=Apix,
+            m_max_cutsrc=m_max_cutsrc,
         )
 
         param_dict['c_i_shot'] = c_i_shot 
@@ -1119,7 +1168,7 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
 
         # Create interpolation function for clustering spectrum
         # Remove shot noise to get pure clustering
-        clII_clus_shot_subtracted = clII_clus
+        clII_clus_shot_subtracted = clII_clus - clII_clus[-1]
         clII_clus_shot_subtracted[clII_clus_shot_subtracted < 0] = 0  # Avoid negative values
 
 
@@ -1129,6 +1178,11 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
         log_cl = np.log(clII_clus_shot_subtracted + 1e-20)  # Add floor to avoid log(0)
         smoothed_log_cl = gaussian_filter1d(log_cl, sigma=0.5)  # Smooth by ~0.5 in log-space
         smoothed_cl = np.exp(smoothed_log_cl)
+
+        # use simple power law for clustering component, going as ell^-2:
+
+        cl_powerlaw = 1e-7 * (lC_temp / 1000.0)**(-1.5)
+
 
         cib_unlensed_auto_clus = interp1d(lC_temp, smoothed_cl, kind='linear',
                                           bounds_error=False, fill_value=0.,
@@ -1154,6 +1208,7 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
         if make_intermediate_plots:
             fig = plt.figure(figsize=(5, 4))
             plt.plot(ell_pl, cib_unlensed_auto(ell_pl), label='unlensed')
+            plt.plot(ell_pl, cib_unlensed_auto_clus(ell_pl), label='unlensed (clustering)')
             plt.plot(ell_pl, obs_auto(ell_pl), label='obs')
             plt.plot(ell_pl, obs_auto(ell_pl)-cib_unlensed_auto(ell_pl), label='difference', linestyle='dashed', color='k')
             plt.xscale('log')
@@ -1161,6 +1216,7 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
             plt.xlabel('$\\ell$', fontsize=14)
             plt.ylabel('$C_{\\ell}$', fontsize=14)
             plt.legend()
+            plt.xlim(200, 1e5)
             save_current_plot(fig, "cl_components", x, save_intermediate_plots=save_intermediate_plots, intermediate_plot_dir=intermediate_plot_dir)
             plt.close()
             # if plot:
@@ -1181,8 +1237,10 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
             vprint(f"  -> Using kcorr={kcorr_use:.6f}")
             
         # Organize into dictionaries for cleaner function calls
-        map_dict = dict({'counts_map':counts_map, 'mask':mask, 'cib_intensity_map':cib_intensity_map, 
-                        'obs_map':obs_map, 'cibFourier':cibFourier, 'kappa_true':cib_intensity_map})
+        # Use actual kappa_true_map from lensed mocks if available, otherwise use CIB intensity (fallback)
+        kappa_true_for_cross = kappa_true_map if kappa_true_map is not None else cib_intensity_map
+        map_dict = dict({'counts_map':counts_map, 'mask':mask, 'cib_intensity_map':cib_intensity_map,
+                        'obs_map':obs_map, 'cibFourier':cibFourier, 'kappa_true':kappa_true_for_cross})
         
         cl_fns = dict({'cib_unlensed_auto':cib_unlensed_auto, 'obs_auto':obs_auto, 
                       'W_ell':W_ell, 'B_ell':b_ell_use, 'cib_unlensed_auto_clus':cib_unlensed_auto_clus})
@@ -1208,15 +1266,18 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
         cl_bis[x] = psres['cl_bis']
         clkg[x] = psres['clkg']
         dclkg[x] = psres['dclkg']
+        if 'clg_kappa_true' in psres:
+            clg_kappa_true[x] = psres['clg_kappa_true']
 
         N_L_kappa[x] = psres['N_L']
         N_L_err_kappa[x] = psres['N_L_err']
+
+        lC = psres['lC']  # Always get lC for cross-spectra computation
 
         if enable_lensing:
             vprint(f'[sim {x}] computing cross-correlation with input kappa')
             kappa_fourier = kappa_fourier_list[x]
             f_kappa = f_kappa_list[x]
-            lC = psres['lC']
 
             clkg_kappa_input[x], dclkg_kappa_input[x] = proc_clkg_with_kappa(
                 baseMap, dataFourier, kappa_fourier, f_kappa, kappa_amplitude,
@@ -1238,6 +1299,30 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
                 plt.close()
 
             vprint(f'[sim {x}] done with kappa cross-correlation')
+
+        if kappa_true_map is not None:
+            vprint(f'[sim {x}] computing cross-correlation with true kappa from mock')
+            kappa_true_fourier = baseMap.fourier(kappa_true_map - np.mean(kappa_true_map))
+            kappa_true_fourier_list.append(kappa_true_fourier)
+
+            clkg_kappa_true[x], dclkg_kappa_true[x] = proc_clkg_with_kappa(
+                baseMap, dataFourier, kappa_true_fourier, None, 1.0,
+                lC, cl_fns, corr_facs, obs_map=obs_map, param_dict=param_dict, config_dict=config_dict)
+
+            if x == 0 and make_intermediate_plots:
+                fig = plt.figure(figsize=(6, 4))
+                lC_true, clk_true, clerr_true = baseMap.powerSpectrum(kappa_true_fourier)
+                plt.loglog(lC_true, clk_true, linewidth=2.5, color='blue', label='$C_L^{\\kappa_{true}}$ (mock)')
+                plt.errorbar(lC, clkg_kappa_true[x], fmt='o', color='green', markersize=5, capsize=2.5, label='$C_L^{\\hat{\\kappa}\\kappa_{true}}$ (QE)')
+                plt.xlabel('$L$', fontsize=14)
+                plt.ylabel('$C_L$', fontsize=14)
+                plt.grid(alpha=0.3)
+                plt.legend(fontsize=12)
+                plt.title('QE cross-correlation with true kappa from mock')
+                save_current_plot(fig, "clkg_kappa_true", x, save_intermediate_plots=save_intermediate_plots, intermediate_plot_dir=intermediate_plot_dir)
+                plt.close()
+
+            vprint(f'[sim {x}] done with true kappa cross-correlation')
 
         kcorr_list.append(corr_facs['kcorr'])
         vbeam_list.append(corr_facs['vbeam'])
@@ -1275,6 +1360,12 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
             clk_input_spectrum = f_kappa_list[0](lrange_clk) * kappa_amplitude
             res['lrange_clk'] = lrange_clk
             res['clk_input_spectrum'] = clk_input_spectrum
+
+    # Add true kappa cross-spectrum if computed (from lensed mocks with comb_kappa)
+    if kappa_true_fourier_list:
+        res['clkg_kappa_true'] = clkg_kappa_true
+        res['dclkg_kappa_true'] = dclkg_kappa_true
+        res['clg_kappa_true'] = clg_kappa_true
 
     return res
 
@@ -1319,7 +1410,7 @@ def compute_normalization(baseMap, lC, norm_Fourier):
 
 def compute_lensing_ps_quantities_v2(baseMap, map_dict, cl_fns, param_dict, config_dict, corr_facs,
                                      save_intermediate_plots=False, intermediate_plot_dir=None, 
-                                     mode='qe_kappa_ps_hardened'):
+                                     mode='qe_kappa_ps_hardened', apply_filter=False):
     """
     Compute lensing power spectrum quantities using dictionary-based inputs.
 
@@ -1347,7 +1438,25 @@ def compute_lensing_ps_quantities_v2(baseMap, map_dict, cl_fns, param_dict, conf
     path_k = 'example_kappa.npz'
     
     print('obs map in compute_lensing_ps_quantities_v2 is ', np.mean(map_dict['obs_map']))
-    dataFourier = baseMap.fourier(map_dict['obs_map'])
+
+    if apply_filter:
+        from ciber.processing.filtering import precomp_filter_general, apply_filter_to_map_precomp
+        dimx, dimy = 1024, 1024
+        print('FILTERING MAP')
+        dot1, X, mask_rav = precomp_filter_general(dimx, dimy, mask=np.ones_like(map_dict['obs_map']), gradient_filter=False, quadoff_grad=False, fc_sub=False, fc_sub_quad_offset=False, fc_sub_n_terms=2, fc_sub_with_gradient=False)
+        theta, filter_comp = apply_filter_to_map_precomp(map_dict['obs_map'], dot1, X, mask_rav=mask_rav)
+        obs_map_use = map_dict['obs_map'] - filter_comp
+
+        fig = plot_map(filter_comp, figsize=(5, 5), title='Filtered component', show=False, return_fig=True)
+        save_current_plot(fig, "filtered_component", 0, save_intermediate_plots=save_intermediate_plots, intermediate_plot_dir=intermediate_plot_dir)
+
+    else:
+        obs_map_use = map_dict['obs_map']
+
+
+    fig_obsmapuse = plot_map(obs_map_use, figsize=(5, 5), title='Obs map used for QE', show=False, return_fig=True)
+    save_current_plot(fig_obsmapuse, "obs_map_use", 0, save_intermediate_plots=save_intermediate_plots, intermediate_plot_dir=intermediate_plot_dir)
+    dataFourier = baseMap.fourier(obs_map_use)
 
     # Extract beam function (if provided) for QE normalization
     fB_ell = cl_fns.get('B_ell', None)
@@ -1398,11 +1507,17 @@ def compute_lensing_ps_quantities_v2(baseMap, map_dict, cl_fns, param_dict, conf
     galdens = proc_input_map(map_dict['counts_map'], map_dict['mask'], 
                             galdens=True, apply_mask=config_dict['apply_mask'])
 
+    galdens = galdens.transpose()  # Transpose to match expected shape (y, x)
+
+    if apply_filter:
+        theta_g, filter_comp_g = apply_filter_to_map_precomp(galdens, dot1, X, mask_rav=mask_rav)
+        galdens -= filter_comp_g
+
     # Fourier transform processed maps
     kFourier_est_mask, kappa_true_Fourier, kFourier_gal_mask = [baseMap.fourier(mapex) 
                                                                  for mapex in [kappa_est_map, kappa_true, galdens]]
 
-    # CRITICAL: Filter kappa estimate to valid L range
+    # Filter kappa estimate to valid L range
     # QE normalization is only valid for L < lMax (not 2*lMax)
     # Beyond this, mode coupling in normalization integral becomes unreliable
     L_max_valid = param_dict['lMax']
@@ -1416,6 +1531,7 @@ def compute_lensing_ps_quantities_v2(baseMap, map_dict, cl_fns, param_dict, conf
     lC, clgg, clggerr = baseMap.powerSpectrum(kFourier_gal_mask)
     lC, clx, clxerr = baseMap.crossPowerSpectrum(kFourier_est_filtered, kappa_true_Fourier, plot=False)
     lC, clkg, clkgerr = baseMap.crossPowerSpectrum(kFourier_est_filtered, kFourier_gal_mask, plot=False)
+    lC, clg_kappa_true, clg_kappa_true_err = baseMap.crossPowerSpectrum(kFourier_gal_mask, kappa_true_Fourier, plot=False)
 
     def f(l):
         # cut off the high ells from input map
@@ -1437,9 +1553,11 @@ def compute_lensing_ps_quantities_v2(baseMap, map_dict, cl_fns, param_dict, conf
     if map_dict.get('cibFourier') is not None:
         print('already have cibFourier..')
         f_filt = lambda l: (l <= param_dict['lMax'])*(l >= param_dict['lMin'])
-        # iVarDataFourier = baseMap.filterFourierIsotropic(f_filt, dataFourier=map_dict['cibFourier'], test=False)        
+        # iVarDataFourier = baseMap.filterFourierIsotropic(f_filt, dataFourier=map_dict['cibFourier'], test=False)
         # lC, clII, clIIerr = baseMap.powerSpectrum(iVarDataFourier)
-        lC, clII, clIIerr = baseMap.powerSpectrum(map_dict['cibFourier'])
+        # lC, clII, clIIerr = baseMap.powerSpectrum(map_dict['cibFourier'])
+
+        lC, clII, clIIerr = baseMap.powerSpectrum(dataFourier)
 
     else:        
         iVarDataFourier = baseMap.filterFourierIsotropic(f, dataFourier=dataFourier, test=False)        
@@ -1636,10 +1754,11 @@ def compute_lensing_ps_quantities_v2(baseMap, map_dict, cl_fns, param_dict, conf
         clgg /= corr_facs['unmask_frac']
         clggerr /= corr_facs['unmask_frac']
 
-    psres = {'lC':lC, 'clkk':clkk, 'clkkerr':clkkerr, 'clgg':clgg, 'clggerr':clggerr, 
-            'clII':clII, 'clIIerr':clIIerr, 'clx':clx, 'clxerr':clxerr, 
-            'clkg':clkg, 'clkgerr':clkgerr, 'cl_bis':cl_bis, 'sCl_bis':sCl_bis, 
+    psres = {'lC':lC, 'clkk':clkk, 'clkkerr':clkkerr, 'clgg':clgg, 'clggerr':clggerr,
+            'clII':clII, 'clIIerr':clIIerr, 'clx':clx, 'clxerr':clxerr,
+            'clkg':clkg, 'clkgerr':clkgerr, 'cl_bis':cl_bis, 'sCl_bis':sCl_bis,
             'dclkg':clkg_bias, 'kappa_est_map':kappa_est_map, 'kappa_true':kappa_true, 'galdens':galdens,
+            'clg_kappa_true':clg_kappa_true, 'clg_kappa_true_err':clg_kappa_true_err,
             'N_L':N_L, 'N_L_err':N_L_err}
 
     return psres
@@ -1781,7 +1900,7 @@ def run_lens_recover(inst, nsim=5, scale_clkk=1.0, ifield_list=[4, 6, 7, 8], moc
             # Plot QE normalization N_L for diagnostics
             if psres['N_L'] is not None:
                 fig_nl = plot_normalization(psres['lC'], psres['N_L'], psres['N_L_err'], 
-                                 lMin=param_dict['lMin'], lMax=param_dict['lMax'])
+                                 lMin=param_dict['lMin'], lMax=param_dict['lMax'], figsize=(10, 7))
                 save_current_plot(fig_nl, "N_L_normalization_simidx"+str(simidx)+"_ifield"+str(fieldidx))
 
             plot_clx_clkk_clkg(psres['lC'], psres['clx'], psres['clkk'], psres['clkg'], psres['clxerr'], psres['clkkerr'], psres['clkgerr'])

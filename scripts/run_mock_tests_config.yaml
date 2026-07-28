@@ -38,6 +38,9 @@ skew_filter_mode: bandpass
 s_max: 10.0
 use_beam: true
 
+# bright source cut
+m_max_cutsrc: 22.0
+
 
 # add uncorrelated foregrounds to the CIB map. If true, the foregrounds are generated as a Gaussian random field with a power-law power spectrum (ell^-foreground_alpha).
 add_foreground: false
@@ -46,10 +49,11 @@ foreground_alpha: 2.0
 foreground_seed: 12345
 
 
-mode: qe_kappa_ln_hardened
-# mode: qe_kappa_norm
+# mode: qe_kappa_ln_hardened
+mode: qe_kappa_norm
 
 datestr: "111125"
+
 res_root: res
 fig_root: figures
 
@@ -60,3 +64,11 @@ fig_root: figures
 enable_lensing: false
 kappa_amplitude: 0.5
 kappa_seed: 12345
+
+# Pre-lensed mock configuration
+# use_lensed_mocks: Set to true to load pre-lensed mocks instead of generating lensing on the fly
+# lensed_mock_datestr: Date string for pre-lensed mock file location (e.g., "072726")
+# nbar_tracer: Number density for tracer galaxies in the lensed mocks (e.g., 100000.0)
+use_lensed_mocks: true
+lensed_mock_datestr: "072726"
+nbar_tracer: 100000.0
