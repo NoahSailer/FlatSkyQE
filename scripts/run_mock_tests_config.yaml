@@ -40,6 +40,7 @@ use_beam: true
 
 # bright source cut
 m_max_cutsrc: 22.0
+z_max_cutsrc: 1.5
 
 
 # add uncorrelated foregrounds to the CIB map. If true, the foregrounds are generated as a Gaussian random field with a power-law power spectrum (ell^-foreground_alpha).

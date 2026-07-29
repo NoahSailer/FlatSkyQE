@@ -59,7 +59,7 @@ def genGRF_from_Cl(self, fCl, seed=None):
 
 def generate_cib_map(map_size=1024, n_cib_per_pixel=0.01, n_gal_per_pixel=0.01,
                      s_min=1.0, s_max=100.0, alpha=2.5, seed=42, mock_sim_fpath=False, fieldidx=0, ciber_inst=1, 
-                     apply_mask=False, dx=None, dy=None, mu=None, m_max_cutsrc=None):
+                     apply_mask=False, dx=None, dy=None, mu=None, m_max_cutsrc=None, z_max_cutsrc=0.5):
     """
     Generates a 2D CIB intensity map with Poisson-distributed point sources.
 
@@ -93,15 +93,28 @@ def generate_cib_map(map_size=1024, n_cib_per_pixel=0.01, n_gal_per_pixel=0.01,
 
             all_cib_mags = mock_dat['all_cib_mags']
 
+            all_cib_redshifts = mock_dat['all_zs']
+
+            all_g_redshifts = tracer_cat[:,2].copy()
+            mags = tracer_cat[:,3].copy()
+
+            print('len cib mags, len cib redshifts:', len(all_cib_mags), len(all_cib_redshifts))
+
             ifield = mock_dat['ifield']
 
             if m_max_cutsrc is not None:
                 print('')
                 cib_map_bright = make_cib_mock(ciber_inst, ifield, tracer_cat[tracer_cat[:,3]<m_max_cutsrc])
                 cib_map -= cib_map_bright
-
                 tracer_cat = tracer_cat[tracer_cat[:,3]>m_max_cutsrc]
 
+            if z_max_cutsrc is not None:
+                cib_map_bright = make_cib_mock(ciber_inst, ifield, tracer_cat[tracer_cat[:,2]<z_max_cutsrc])
+                cib_map -= cib_map_bright
+                # all_cib_redshifts = all_cib_redshifts[all_cib_redshifts>z_max_cutsrc]
+
+                # tracer_cat = tracer_cat[tracer_cat[:,2]>z_max_cutsrc]
+                # all_g_redshifts = all_g_redshifts[all_g_redshifts<z_max_cutsrc]
 
 
             # Create synthetic counts map from tracer catalog
@@ -113,14 +126,17 @@ def generate_cib_map(map_size=1024, n_cib_per_pixel=0.01, n_gal_per_pixel=0.01,
             np.add.at(counts_map, (y_coords, x_coords), 1.)
 
             print('tracer cat has shape ', tracer_cat.shape)
-            mags = tracer_cat[:,3]
+            # mags = tracer_cat[:,3]
 
             cmock = ciber_mock()
 
             fluxes_cib = np.array(cmock.mag_2_nu_Inu(all_cib_mags, band=ciber_inst-1).value)
             fluxes_g = np.array(cmock.mag_2_nu_Inu(mags, band=ciber_inst-1).value)
 
-            return cib_map, fluxes_cib, fluxes_g, counts_map, mask, m_max_cutsrc
+            print('len fluxes cib, cib redshifts:', len(fluxes_cib), len(all_cib_redshifts))
+            print('len fluxes g, g redshifts:', len(fluxes_g), len(all_g_redshifts))
+
+            return cib_map, fluxes_cib, fluxes_g, counts_map, mask, m_max_cutsrc, all_cib_redshifts, all_g_redshifts
 
 
         else:
@@ -569,9 +585,7 @@ class galaxy_clus_gen():
                 for j in range(i):               # only foreground bins
                     kappa_fg += w[j] * (all_kappa[j] - 1.0)
 
-
                 print("mu mean should be ~1:", np.mean(1+2*kappa_fg))
-
 
                 dx, dy, mu = get_lensing_fields_from_kappa(kappa_fg, fmap)
 
@@ -657,6 +671,7 @@ def gen_lensed_mocks(nset, inst, ifield_list=[4, 6, 7, 8], nbar_tracer=5e4, date
 
             # retain mags of all sources for later calculations
             all_cib_mags = mock_cat[:,3]
+            all_zs = mock_cat[:,2]
 
             # tracer_cat = grab_nbar_tracer_cat(mock_cat, Adeg=Adeg, nbar_targ=nbar_tracer)
             
@@ -682,4 +697,4 @@ def gen_lensed_mocks(nset, inst, ifield_list=[4, 6, 7, 8], nbar_tracer=5e4, date
             np.savez(save_fpath, \
                     tracer_cat=tracer_cat, cib_map=cib_map, cib_map_cut=cib_map_cut, comb_kappa=comb_kappa, zrange=zrange_grf, nbar_tracer=nbar_tracer, 
                     all_kappa=kappa_save, m_max_cutsrc=m_max_cutsrc, m_min=m_min, m_max=m_max, Adeg=Adeg, band=band, ifield=ifield, inst=inst, 
-                    all_cib_mags=all_cib_mags)
+                    all_cib_mags=all_cib_mags, all_zs=all_zs)

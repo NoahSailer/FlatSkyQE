@@ -1,7 +1,10 @@
 import matplotlib
 import matplotlib.pyplot as plt
+from forecast_cib_lens import ciber_lens_forecast
 import numpy as np
 from scipy import stats
+
+from forecast_cib_lens import plot_integrated_snr_vs_survey_params, ciber_lens_forecast
 
 
 def gen_suptitle(grab_cib_sim, add_noise, apply_mask, exact_beam=False, pixel_fn_correct=False, psf_pix_fwhm=None):
@@ -101,6 +104,129 @@ def plot_input_recovered_kappa(
     plt.xlim(xlim)
 
     plt.ylim(ylim)
+
+    return fig
+
+def init_clf_class(inst=1, ifield=8, ell_min=10., clkg_scale=0.5):
+
+    clf = ciber_lens_forecast(ell_min=ell_min)
+    clf.load_bl(inst, ifield)
+
+    clf.load_clk()
+    clf.load_clx(clkg_scale=clkg_scale)
+
+    return clf   
+
+
+def plot_clkg_cross_spectrum(
+        res,
+        figsize=(6, 5),
+        markersize=5,
+        ylim=[1e-11, 1e-5],
+        xlim=[100, 1.0e5],
+        ncol=1,
+        bbox_to_anchor=None,
+        legend_fs=10,
+        loc=1,
+        plot_ratio=False,
+        rat_min=0.01,
+        rat_max=1000,
+        title_fs=14,
+        suptitle=None,
+        plot_sem=True,
+        capsize=2.5,
+        lMax=None,
+        lMin=None,
+        show=True,
+        ylogscale=True,
+    ):
+    """Plot kappa-galaxy cross-spectrum only (subplot 2,2,4 from plot_recov_components)."""
+
+    if res['clII'].shape[0] < 2:
+        print('Only one realization-- cannot plot error bars.')
+        plot_sem = False
+
+    lC = res['lC']
+    y_clkg, sem_clkg = np.mean(res['clkg'], axis=0), np.std(res['clkg'], axis=0, ddof=1)/np.sqrt(res['clkg'].shape[0])
+    y_dclkg, sem_dclkg = np.mean(res['dclkg'], axis=0), np.std(res['dclkg'], axis=0, ddof=1)/np.sqrt(res['dclkg'].shape[0])
+    refclkg = res['analytic_bias']
+
+    # Use kappa cross-correlation if lensing was applied, otherwise use galaxy cross
+    if 'enable_lensing' in res and res['enable_lensing']:
+        y_clkg, sem_clkg = np.mean(res['clkg_kappa_input'], axis=0), np.std(res['clkg_kappa_input'], axis=0, ddof=1)/np.sqrt(res['clkg_kappa_input'].shape[0])
+        y_dclkg, sem_dclkg = np.mean(res['dclkg_kappa_input'], axis=0), np.std(res['dclkg_kappa_input'], axis=0, ddof=1)/np.sqrt(res['dclkg_kappa_input'].shape[0])
+        using_kappa_input = True
+    else:
+        using_kappa_input = False
+
+    fig = plt.figure(figsize=figsize)
+
+    if suptitle is not None:
+        plt.suptitle(suptitle, fontsize=title_fs)
+
+    if plot_ratio:
+        plt.errorbar(lC, y_clkg, yerr=sem_clkg, label='$C_{L}^{\\hat{\\kappa} g}$/theory', color='r', marker='x', markersize=markersize, capsize=capsize)
+        plt.errorbar(lC, y_dclkg, yerr=sem_dclkg, label='$\\Delta C_{L}^{\\kappa g}$/theory', color='b', marker='^', markersize=markersize, capsize=capsize)
+    else:
+        if using_kappa_input:
+            clkg_label = '$C_{L}^{\\hat{\\kappa}\\kappa_{input}}$'
+            dclkg_label = '$C_{L}^{I^2\\kappa_{input}}$ (mocks)'
+        else:
+            clkg_label = '$C_{L}^{\\hat{\\kappa} g}$'
+            dclkg_label = '$\\Delta C_{L}^{\\kappa g}$ (mocks)'
+
+        if plot_sem:
+            plt.errorbar(lC, y_clkg, yerr=sem_clkg, label=clkg_label, color='r', marker='x', markersize=markersize, capsize=capsize)
+            plt.errorbar(lC, y_dclkg, yerr=sem_dclkg, label=dclkg_label, color='b', marker='^', markersize=markersize, capsize=capsize)
+        else:
+            plt.plot(lC, y_clkg, label=clkg_label, color='r', marker='x', markersize=markersize)
+            plt.plot(lC, y_dclkg, label=dclkg_label, color='b', marker='^', markersize=markersize)
+
+        if 'clg_kappa_true' in res and res['clg_kappa_true'].shape[0] > 0:
+            y_clg_kappa_true = np.mean(res['clg_kappa_true'], axis=0)
+            sem_clg_kappa_true = np.std(res['clg_kappa_true'], axis=0, ddof=1) / np.sqrt(res['clg_kappa_true'].shape[0])
+            if plot_ratio:
+                y_clg_kappa_true /= res['analytic_bias']
+                sem_clg_kappa_true /= res['analytic_bias']
+            if plot_sem:
+                plt.errorbar(lC, y_clg_kappa_true, yerr=sem_clg_kappa_true, label='$C_{L}^{g\\kappa_{true}}$ (gal x true)', color='g', marker='s', markersize=markersize, capsize=capsize)
+            else:
+                plt.plot(lC, y_clg_kappa_true, label='$C_{L}^{g\\kappa_{true}}$ (gal x true)', color='g', marker='s', markersize=markersize)
+
+        clf = init_clf_class()
+        plt.plot(clf.lrange, 2.*clf.clx, color='k', linestyle='solid', linewidth=3, label='Signal')
+
+    if 'enable_lensing' in res and res['enable_lensing']:
+        from lensing_utils import build_kappa_power_spectrum
+        kappa_amp = res.get('kappa_amplitude', 1.0)
+        f_kappa = build_kappa_power_spectrum(ell_min=1, ell_max=2.*lC[-1], clkg_scale=1.0)
+        clk_input = f_kappa(lC) * kappa_amp
+        print('clk input is ', clk_input)
+        plt.plot(lC, clk_input, label=f'Input $C_{{L}}^{{\\kappa}}$ (amp={kappa_amp})', color='purple', linewidth=2.5, linestyle='--', zorder=5)
+
+    plt.axhline(refclkg, label='$\\Delta C_{L}^{\\kappa g}=\\Omega_{\\rm pix}C_{\\ell}^{I^2g}/2C_{\\ell}^{II}$', color='k', linestyle='dashed')
+    if lMax is not None:
+        plt.axvline(lMax, color='k', linestyle='solid')
+    if lMin is not None:
+        plt.axvline(lMin, color='k', linestyle='solid')
+
+    plt.xlabel('$L$', fontsize=14)
+    plt.ylabel('$C_{\\ell}$', fontsize=14)
+
+    plt.xscale('log')
+    if ylogscale:
+        plt.yscale('log')
+    plt.legend(ncol=ncol, bbox_to_anchor=bbox_to_anchor, fontsize=legend_fs, loc=loc)
+    plt.xlim(xlim)
+
+    if ylim is None:
+        ylim_plot = [rat_min*res['analytic_bias'], rat_max*res['analytic_bias']]
+    else:
+        ylim_plot = ylim
+    plt.ylim(ylim_plot)
+
+    if show:
+        plt.show()
 
     return fig
 
@@ -318,6 +444,12 @@ def plot_recov_components(res, figsize=(9, 6), markersize=10, ylim=[1e-10, 1e-7]
                 plt.errorbar(lC, y_clg_kappa_true, yerr=sem_clg_kappa_true, label='$C_{L}^{g\\kappa_{true}}$ (gal x true)', color='g', marker='s', markersize=markersize, capsize=capsize)
             else:
                 plt.plot(lC, y_clg_kappa_true, label='$C_{L}^{g\\kappa_{true}}$ (gal x true)', color='g', marker='s', markersize=markersize)
+
+
+        clf = init_clf_class()
+        plt.plot(clf.lrange, 2.*clf.clx, color='k', linestyle='solid', linewidth=3, label='Signal')
+
+
 
     # If lensing was applied, show the input C_L^kappa spectrum
     if 'enable_lensing' in res and res['enable_lensing']:

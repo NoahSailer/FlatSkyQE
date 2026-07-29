@@ -853,7 +853,8 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
                          mode='qe_kappa_norm',
                          add_foreground=False, foreground_alpha=2.0, foreground_seed=12345,
                          use_lensed_mocks=False, lensed_mock_datestr=None, nbar_tracer=1e5, 
-                         m_max_cutsrc=None):
+                         m_max_cutsrc=None, 
+                         z_max_cutsrc=None):
 
     def vprint(*args, level=1, **kwargs):
         if verbose >= level:
@@ -973,16 +974,16 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
 
         cib_intensity_map_unlensed, all_cib_fluxes, \
             all_g_fluxes, counts_map,\
-                mask, m_max_cutsrc = generate_cib_map(
+                mask, m_max_cutsrc, all_cib_redshifts, all_g_redshifts = generate_cib_map(
                                             map_size=MAP_SIZE,
                                             n_cib_per_pixel=N_CIB_PER_PIXEL,
                                             n_gal_per_pixel=N_G_PER_PIXEL,
                                             seed=None, s_max=s_max,
                                             mock_sim_fpath=mock_sim_fpath,
                                             apply_mask=apply_mask, 
-                                            m_max_cutsrc=m_max_cutsrc)
+                                            m_max_cutsrc=m_max_cutsrc, z_max_cutsrc=z_max_cutsrc)
 
-
+        print('here all g redshifts has length ', len(all_g_redshifts))
 
         if enable_lensing:
             cib_intensity_map, _, _, _ = generate_cib_map(
@@ -1111,6 +1112,9 @@ def delta_fn_sources_test(nsim = 2, MAP_SIZE = 1024,
             fluxes_g=galaxy_fluxes,
             pix_area=Apix,
             m_max_cutsrc=m_max_cutsrc,
+            z_max_cutsrc=z_max_cutsrc,
+            redshifts_cib=all_cib_redshifts,
+            redshifts_g = all_g_redshifts,
         )
 
         param_dict['c_i_shot'] = c_i_shot 

@@ -43,6 +43,7 @@ DEFAULT_CONFIG = {
     "lensed_mock_datestr": None,
     "nbar_tracer": 1.0e5,
     "m_max_cutsrc": None,
+    "z_max_cutsrc": None,
 }
 
 
@@ -116,6 +117,7 @@ def _normalize_config_types(cfg: Dict[str, Any]) -> Dict[str, Any]:
     normalized["alpha"] = float(normalized["alpha"])
     normalized["s_max"] = float(normalized["s_max"])
     normalized["m_max_cutsrc"] = _coerce_optional_float(normalized["m_max_cutsrc"], "m_max_cutsrc")
+    normalized["z_max_cutsrc"] = _coerce_optional_float(normalized["z_max_cutsrc"], "z_max_cutsrc")
 
     normalized["lensmode"] = str(normalized["lensmode"]).strip()
     normalized["skew_filter_mode"] = str(normalized["skew_filter_mode"]).strip()
@@ -201,6 +203,9 @@ def _config_subdir(cfg: Dict[str, Any]) -> str:
     ]
     if cfg["m_max_cutsrc"] is not None:
         tags.append(f"mcut-{_slugify_float(cfg['m_max_cutsrc'])}")
+
+    if cfg["z_max_cutsrc"] is not None:
+        tags.append(f"zcut-{_slugify_float(cfg['z_max_cutsrc'])}")
     return "_".join(tags)
 
 
@@ -221,6 +226,10 @@ def _build_resname(cfg: Dict[str, Any], lmax: float, psf_pix_fwhm: Optional[floa
         resname += "_wpixcorr"
     if cfg["m_max_cutsrc"] is not None:
         resname += f"_mcut{_slugify_float(cfg['m_max_cutsrc'])}"
+
+    if cfg["z_max_cutsrc"] is not None:
+        resname += f"_zcut{_slugify_float(cfg['z_max_cutsrc'])}"
+
     return resname
 
 
@@ -242,6 +251,7 @@ def _resolve_config(args: argparse.Namespace) -> Dict[str, Any]:
         "fig_root": args.fig_root,
         "mode": args.mode,
         "m_max_cutsrc": args.m_max_cutsrc,
+        "z_max_cutsrc": args.z_max_cutsrc,
     }
 
     for key, value in overrides.items():
@@ -281,6 +291,8 @@ def _resolve_config(args: argparse.Namespace) -> Dict[str, Any]:
         cfg["nbar_tracer"] = args.nbar_tracer
     if args.m_max_cutsrc is not None:
         cfg["m_max_cutsrc"] = args.m_max_cutsrc
+    if args.z_max_cutsrc is not None:
+        cfg["z_max_cutsrc"] = args.z_max_cutsrc
 
     return _normalize_config_types(cfg)
 
@@ -381,6 +393,9 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--m-max-cutsrc", type=float, default=None,
                        help="Maximum magnitude cutoff for sources (brighter than this removed from intensity map)")
 
+    parser.add_argument("--z-max-cutsrc", type=float, default=None,
+                       help="Maximum redshift cutoff for sources (brighter than this removed from intensity map)")
+
     parser.add_argument("--dry-run", action="store_true", help="Print resolved config and planned jobs")
     return parser
 
@@ -414,7 +429,7 @@ class TestSweepRunner:
 
     def run_single_test(self, job: SweepJob) -> str:
         from mock_lens_test import delta_fn_sources_test
-        from kappa_plotting_fns import gen_suptitle, plot_recov_components, plot_input_recovered_kappa
+        from kappa_plotting_fns import gen_suptitle, plot_recov_components, plot_input_recovered_kappa, plot_clkg_cross_spectrum
 
         cfg = self.cfg
         verbose = cfg["verbose"]
@@ -474,6 +489,7 @@ class TestSweepRunner:
                 lensed_mock_datestr=cfg["lensed_mock_datestr"],
                 nbar_tracer=cfg["nbar_tracer"],
                 m_max_cutsrc=cfg.get("m_max_cutsrc", None),
+                z_max_cutsrc=cfg.get("z_max_cutsrc", None),
             )
 
         if cfg["plot"]:
@@ -533,6 +549,24 @@ class TestSweepRunner:
             )
             fig_fpath = os.path.join(self.fig_dir, f"{resname}_{cfg['datestr']}_nbar{cfg['nbar']}.png")
             fig.savefig(fig_fpath, dpi=200)
+
+            fig_clkg = plot_clkg_cross_spectrum(
+                res,
+                figsize=(6, 5),
+                markersize=5,
+                ylim=[1e-11, 1e-5],
+                xlim=[100, 1.0e5],
+                ncol=1,
+                bbox_to_anchor=None,
+                legend_fs=10,
+                loc=1,
+                lMax=job.lmax,
+                lMin=cfg["lmin"],
+                show=False,
+                ylogscale=True
+            )
+            fig_clkg_fpath = os.path.join(self.fig_dir, f"{resname}_{cfg['datestr']}_nbar{cfg['nbar']}_clkg.png")
+            fig_clkg.savefig(fig_clkg_fpath, dpi=200)
 
         if cfg["save"]:
             np.savez(res_fpath, **res)

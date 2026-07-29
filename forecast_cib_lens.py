@@ -50,14 +50,14 @@ def gaussian_smooth(data, sigma):
     return smoothed_data
 
 
-def forecast_bandpower_sensitivity(inst, lEdges=None, Adeg=16, ell_min=210, nBins=51):
+def forecast_bandpower_sensitivity(inst, lEdges=None, Adeg=16, ell_min=210, nBins=51, pred_fpath=None):
     
     clf = ciber_lens_forecast(ell_min=ell_min, Adeg=Adeg)
     
     clf.load_bl(inst, 4, inplace=True, plot=False)
 
     clf.load_clk()
-    clf.load_clg(inst, basepath='../data/lens_prods/ciber_gal_cross/')
+    clf.load_clg(inst, basepath='../data/lens_prods/ciber_gal_cross/', pred_fpath=pred_fpath)
     clf.load_clx(clkg_scale=0.5)
     clf.forecast_nlkappa(beam_correct=True)
 
@@ -124,7 +124,8 @@ def compare_forecast_configurations(inst=1, ifield_use=4, ell_min=210, ell_max=1
                                    show_signal=True, clkg_scale=0.5, textkg_xpos=300, textkg_ypos=2e-8, textkg=None, 
                                    bbox_to_anchor=[0.0, 1.0], 
                                    legend_fs=12, legend_ncol=1, wspace=0.3, 
-                                   textkg_fs=14, cmap_name='Blues', nl_kappa_nongauss=None):
+                                   textkg_fs=14, cmap_name='Blues', nl_kappa_nongauss=None, 
+                                   linewidth=2.5):
     """
     Compare bandpower sensitivities across multiple survey configurations.
     Creates two-panel figure: left panel shows N_L^kk components, right panel shows bandpower sensitivities.
@@ -208,7 +209,7 @@ def compare_forecast_configurations(inst=1, ifield_use=4, ell_min=210, ell_max=1
     component_colors = ['purple', 'blue', 'green', 'orange', 'brown']
     for i, (term, label) in enumerate(zip(terms, labels_comp)):
         ax_kk.plot(clf.lrange, np.sqrt(inverse_nl*term), 
-                  color=component_colors[i], linewidth=2, 
+                  color=component_colors[i], linewidth=linewidth, 
                   label=label, alpha=0.7, linestyle='-')
     
     # Add total uncertainty
@@ -223,8 +224,8 @@ def compare_forecast_configurations(inst=1, ifield_use=4, ell_min=210, ell_max=1
         lrange_plot = np.logspace(np.log10(clf.lrange.min()), np.log10(clf.lrange.max()), 20)
         clx_interp = interp1d(clf.lrange, clf.clx, kind='cubic', bounds_error=False, fill_value='extrapolate')
         clx_plot = clx_interp(lrange_plot)
-        ax_kg.plot(lrange_plot, clx_plot, color='k', linewidth=2.5, 
-                  label='Predicted $C_L^{\\kappa g}$', zorder=100)
+        ax_kg.plot(lrange_plot, clx_plot, color='k', linewidth=3.0, 
+                  label='Predicted $C_L^{\\kappa g}$', zorder=100, alpha=0.9)
     
     # Loop over configurations
     for Adeg in Adeg_list:
@@ -266,7 +267,7 @@ def compare_forecast_configurations(inst=1, ifield_use=4, ell_min=210, ell_max=1
             
             ax_kg.errorbar(L_centers, sigma_bp, xerr=xerr, fmt='none',
                           color=color, capsize=3, elinewidth=2.5,
-                          label=label, alpha=0.8, zorder=10+config_idx)
+                          label=label, alpha=0.7, zorder=10+config_idx)
             
             config_idx += 1
     
@@ -287,7 +288,7 @@ def compare_forecast_configurations(inst=1, ifield_use=4, ell_min=210, ell_max=1
     ax_kg.set_ylabel('$\\sigma(C_L^{\\kappa g})$', fontsize=14)
     ax_kg.set_xlabel('$L$', fontsize=14)
     ax_kg.set_ylim(ylim_kg)
-    ax_kg.set_xlim([L_min*0.8, L_max*1.2])
+    ax_kg.set_xlim([L_min*0.9, L_max*1.1])
     ax_kg.grid(alpha=0.3)
     ax_kg.legend(fontsize=legend_fs, loc=2, bbox_to_anchor=bbox_to_anchor, framealpha=0.9, ncol=legend_ncol)
     if textkg is not None:
@@ -301,6 +302,178 @@ def compare_forecast_configurations(inst=1, ifield_use=4, ell_min=210, ell_max=1
     
     return fig, results
     
+def compare_forecast_configurations_splitfig(inst=1, ifield_use=4, ell_min=210, ell_max=1e5,
+                                   basepath='../data/lens_prods/ciber_gal_cross/',
+                                   Adeg_list=[10, 16, 25], 
+                                   nbar_list=[1e4, 2e4, 5e4],
+                                   L_min=300, L_max=50000, n_bins=20,
+                                   figsize_kk=(7, 5), figsize_kg=(7, 5),
+                                   ylim_kk=[1e-12, 1e-7], ylim_kg=[1e-12, 1e-7],
+                                   show_signal=True, clkg_scale=0.5, textkg_xpos=300, textkg_ypos=2e-8, textkg=None, 
+                                   bbox_to_anchor=[0.0, 1.0], 
+                                   legend_fs=12, tick_fs=14, legend_ncol=1,
+                                   textkg_fs=14, cmap_name='Blues', nl_kappa_nongauss=None, 
+                                   pred_fpath=None, linewidth=2.5, psf_fwhm=None):
+    """
+    Compare bandpower sensitivities across multiple survey configurations.
+    Creates two separate figures:
+      - fig_kk: N_L^kk-related uncertainty components (per-multipole)
+      - fig_kg: bandpower sensitivities
+    
+    Returns
+    -------
+    fig_kk : matplotlib.figure.Figure
+    fig_kg : matplotlib.figure.Figure
+    results : list of dict
+    """
+    
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from matplotlib import cm
+    from scipy.interpolate import interp1d
+    
+    # Create two separate figures/axes
+    fig_kk, ax_kk = plt.subplots(1, 1, figsize=figsize_kk)
+    fig_kg, ax_kg = plt.subplots(1, 1, figsize=figsize_kg)
+    
+    # Generate colors using colormap
+    n_configs = len(Adeg_list) * len(nbar_list)
+    cmap = cm.get_cmap(cmap_name)
+    colors = cmap(np.linspace(0.3, 1.0, n_configs))
+    
+    results = []
+    config_idx = 0
+    
+    # Forecast object for component plotting + signal reference
+    clf = ciber_lens_forecast(ell_min=ell_min, ell_max=ell_max, Adeg=Adeg_list[0])
+    clf.load_bl(inst, ifield_use, inplace=True, plot=False, psf_fwhm=psf_fwhm)
+    clf.load_clk()
+    print('pred fpath is ', pred_fpath)
+    clf.load_clg(inst, basepath=basepath, pred_fpath=pred_fpath)
+    clf.load_clx(clkg_scale=clkg_scale)
+    clf.forecast_nlkappa(beam_correct=True, nl_kappa_nongauss=nl_kappa_nongauss)
+    
+    # Compute uncertainty components (using first nbar for left figure)
+    nbar_sr = nbar_list[0] * (180/np.pi)**2
+    clg_sn_forecast = 1.0 / nbar_sr
+    def n_ell_inv(l):
+        return 1./(2*l+1)
+    inverse_nl = n_ell_inv(clf.lrange) / clf.fsky
+    
+    term1 = clf.clx**2
+    term2 = clf.clk * clf.clg_clus
+    term3 = clf.nlk_tot * clf.clg_clus
+    term4 = clf.clk * clg_sn_forecast
+    term5 = clf.nlk_tot * clg_sn_forecast
+    terms = [term1, term2, term3, term4, term5]
+    labels_comp = [
+        '$\\propto(C_L^{\\kappa g})^2$',
+        '$\\propto C_L^{\\kappa}C_L^g$',
+        '$\\propto N_L^{\\kappa}C_L^g$',
+        '$\\propto C_L^{\\kappa}/\\bar{n}$',
+        '$\\propto N_L^{\\kappa}/\\bar{n}$'
+    ]
+    
+    # Left figure: component curves
+    component_colors = ['purple', 'blue', 'green', 'orange', 'brown']
+    for i, (term, label) in enumerate(zip(terms, labels_comp)):
+        ax_kk.plot(clf.lrange, np.sqrt(inverse_nl * term),
+                   color=component_colors[i], linewidth=linewidth,
+                   label=label, alpha=0.7, linestyle='-')
+    
+    dclsq_total = inverse_nl * (term1 + term2 + term3 + term4 + term5)
+    ax_kk.plot(clf.lrange, np.sqrt(dclsq_total),
+               color='k', linewidth=3, linestyle='--',
+               label='Total', alpha=0.9, zorder=100)
+    
+    # Right figure: signal curve
+    if show_signal:
+        lrange_plot = np.logspace(np.log10(clf.lrange.min()), np.log10(clf.lrange.max()), 20)
+        clx_interp = interp1d(clf.lrange, clf.clx, kind='cubic', bounds_error=False, fill_value='extrapolate')
+        clx_plot = clx_interp(lrange_plot)
+        ax_kg.plot(lrange_plot, clx_plot, color='k', linewidth=3.0, alpha=0.9,
+                   label='Predicted $C_L^{\\kappa g}$', zorder=100)
+    
+    # Loop over configurations
+    for Adeg in Adeg_list:
+        for n, nbar in enumerate(nbar_list):
+            clf = ciber_lens_forecast(ell_min=ell_min, ell_max=ell_max, Adeg=Adeg)
+            clf.load_bl(inst, ifield_use, inplace=True, plot=False, psf_fwhm=psf_fwhm)
+            clf.load_clk()
+            clf.load_clg(inst, basepath=basepath, pred_fpath=pred_fpath)
+            clf.load_clx(clkg_scale=clkg_scale)
+            clf.forecast_nlkappa(beam_correct=True, nl_kappa_nongauss=nl_kappa_nongauss)
+            
+            L_centers, sigma_bp, signal_bp, _ = clf.forecast_kappa_gal_cross_bandpowers(
+                nbar, L_min=L_min, L_max=L_max, n_bins=n_bins, plot=False
+            )
+            
+            results.append({
+                'Adeg': Adeg,
+                'nbar': nbar,
+                'L_centers': L_centers,
+                'sigma_bandpowers': sigma_bp,
+                'signal_bandpowers': signal_bp,
+                'fsky': clf.fsky,
+                'nlk_gauss': clf.nlk_gauss,
+                'nlk_tot': clf.nlk_tot
+            })
+            
+            color = colors[config_idx % len(colors)]
+            nbar_arcmin = nbar / 3600.0
+
+            nbarlab = f'$\\bar{{n}}_g={nbar_arcmin:.1f}$ arcmin$^{{-2}}$'
+
+            if n==0:
+                label = '$1\\sigma$ sensitivity\n'+nbarlab+''
+
+                # label = '$\\sigma(C_L^{\\kappa g})$ ('+nbarlab+')'
+            else:
+                label = nbarlab
+            # lab = f'$\\bar{{n}}_g={nbar_arcmin:.1f}$ arcmin$^{{-2}}$'
+            
+            L_edges = np.logspace(np.log10(L_min), np.log10(L_max), n_bins + 1)
+            xerr = [L_centers - L_edges[:-1], L_edges[1:] - L_centers]
+            
+            ax_kg.errorbar(L_centers, sigma_bp, xerr=xerr, fmt='none',
+                           color=color, capsize=3, elinewidth=2.5,
+                           label=label, alpha=0.8, zorder=10 + config_idx)
+            
+            config_idx += 1
+    
+    # Format left figure
+    ax_kk.set_yscale('log')
+    ax_kk.set_xscale('log')
+    ax_kk.set_ylabel('$\\sigma(C_L^{\\kappa g})$', fontsize=16)
+    ax_kk.set_xlabel('$L$', fontsize=16)
+    ax_kk.set_ylim(ylim_kk)
+    ax_kk.set_xlim([ell_min * 0.9, L_max * 1.1])
+    ax_kk.grid(alpha=0.3)
+    ax_kk.legend(fontsize=legend_fs, loc=1, ncol=2, framealpha=0.9)
+    ax_kk.tick_params(labelsize=tick_fs)
+    ax_kk.set_title('Per multipole uncertainties', fontsize=16)
+    
+    # Format right figure
+    ax_kg.set_yscale('log')
+    ax_kg.set_xscale('log')
+    ax_kg.set_ylabel('$C_L^{\\kappa g}$', fontsize=16)
+    ax_kg.set_xlabel('$L$', fontsize=16)
+    ax_kg.set_ylim(ylim_kg)
+    ax_kg.set_xlim([L_min * 0.9, L_max * 1.1])
+    ax_kg.tick_params(labelsize=tick_fs)
+    ax_kg.grid(alpha=0.3)
+    ax_kg.legend(fontsize=legend_fs, loc=2, bbox_to_anchor=bbox_to_anchor, framealpha=0.9, ncol=legend_ncol)
+    
+    if textkg is not None:
+        ax_kg.text(textkg_xpos, textkg_ypos, textkg, fontsize=textkg_fs, color='k',
+                   bbox=dict(facecolor='white', alpha=0.6, edgecolor='none'))
+
+    # fig_kk.tight_layout()
+    # fig_kg.tight_layout()
+    plt.show()
+    
+    return fig_kk, fig_kg, results
+
 
 class ciber_lens_forecast():
     
@@ -320,38 +493,56 @@ class ciber_lens_forecast():
         
         self.fsky = self.Adeg/41253.
         
-        print('fsky = ', self.fsky)
+        # print('fsky = ', self.fsky)
 
 
-    def load_bl(self, ciber_inst, ifield, inplace=True, plot=False):
+    def load_bl(self, ciber_inst, ifield, inplace=True, plot=False, verbose=False, psf_fwhm=None):
         
         # load files
         
         # data_dir = config.ciber_basepath+'data/fluctuation_data/TM'+str(ciber_inst)+'/'
-        
-        data_dir = '/Users/richardfeder/Documents/ciber/data/fluctuation_data/TM'+str(ciber_inst)+'/'
-
-        bls_fpath = data_dir+'/beam_correction/bl_est_postage_stamps_TM'+str(ciber_inst)+'_081121.npz'
-
         # bls_fpath = config.ciber_basepath+'data/fluctuation_data/TM'+str(ciber_inst)+'/beam_correction/bl_est_postage_stamps_TM'+str(ciber_inst)+'_081121.npz'
-        
-        beamdat = np.load(bls_fpath)
-        print(beamdat.keys())
-        
-        blval = beamdat['B_ells_post'][ifield-4,:]
-        
-        lb = self.cbps.Mkk_obj.midbin_ell
 
-        # blval[-1] = blval[-2]*np.exp(-(lb[-1]/lb[-2])**2/2.)
+
+        if psf_fwhm is not None:
+            # Use Gaussian PSF with specified FWHM
+            arcsec_to_rad = np.pi / (180 * 3600)  # Conversion factor
+            fwhm_rad = psf_fwhm * arcsec_to_rad
+            sigma_rad = fwhm_rad / (2 * np.sqrt(2 * np.log(2)))  # Convert FWHM to sigma
+
+            # Compute Gaussian beam window function
+            W_beam = np.exp(-0.5 * (self.lrange * sigma_rad)**2)
+
+            # Total beam transfer function
+            bl = interp1d(self.lrange, W_beam, bounds_error=False, fill_value=(1., 0.))
+
+            if verbose:
+                print(f"Using Gaussian PSF with FWHM = {psf_fwhm} arcsec")
+                print(f"Sigma (rad) = {sigma_rad:.3e}")
+
+        else:
+
+            data_dir = '/Users/richardfeder/Documents/ciber/data/fluctuation_data/TM'+str(ciber_inst)+'/'
+            bls_fpath = data_dir+'/beam_correction/bl_est_postage_stamps_TM'+str(ciber_inst)+'_081121.npz'
+
+            beamdat = np.load(bls_fpath)
+            if verbose:
+                print(beamdat.keys())
+            
+            blval = beamdat['B_ells_post'][ifield-4,:]
         
-        bl = interp1d(lb, blval, bounds_error=False, fill_value=(1., 0.))
+            lb = self.cbps.Mkk_obj.midbin_ell
+
+            # blval[-1] = blval[-2]*np.exp(-(lb[-1]/lb[-2])**2/2.)
+            
+            bl = interp1d(lb, blval, bounds_error=False, fill_value=(1., 0.))
         
-        lbindiv = np.arange(np.min(lb), np.max(lb))
+        # lbindiv = np.arange(np.min(lb), np.max(lb))
 
         if plot:
             plt.figure(figsize=(4, 3))
             plt.scatter(lb, blval, color='b')
-            plt.plot(lbindiv, bl(lbindiv), color='r')
+            # plt.plot(lbindiv, bl(lbindiv), color='r')
             plt.yscale('log')
             plt.xscale('log')
             plt.show()
@@ -363,7 +554,7 @@ class ciber_lens_forecast():
             return bl
         
         
-    def load_clx(self, clkg_scale=0.5):
+    def load_clx(self, clkg_scale=0.5, verbose=False):
 
         # Load the new cl_kcmb_kgal.csv file
         parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -411,9 +602,10 @@ class ciber_lens_forecast():
         # Evaluate on full lrange with smooth extrapolation
         self.clx = clx_func(self.lrange)
 
-        print(f"Loaded C_L^kg with scale factor {clkg_scale:.2f}")
-        print(f"Extrapolation power law: Cl ∝ ell^{slope:.3f} for ell > {lC.max():.0f}")
-        
+        if verbose:
+            print(f"Loaded C_L^kg with scale factor {clkg_scale:.2f}")
+            print(f"Extrapolation power law: Cl ∝ ell^{slope:.3f} for ell > {lC.max():.0f}")
+            
 #         np.savez('output/fieldav_clx_WISE_unWISE_neo8_kappa_TM'+str(inst)+'.npz', lC=lC, clx=field_av_clx, clxerr=field_av_clxerr)
     
     
@@ -441,15 +633,16 @@ class ciber_lens_forecast():
     def load_clg(self, ciber_inst,
                   catname='WISE', addstr='unWISE_neo8',
                     plot=False, basepath='../data/jordan_mocks/v2/', 
-                    galstr='hsc_i_lt_25.0', zmin=0.0, zmax=1.0):
+                    galstr='hsc_i_lt_25.0', zmin=0.0, zmax=1.0, pred_fpath=None):
         
         # load autos from unWISE
         # cgps_file = load_ciber_gal_ps(ciber_inst, catname, addstr=addstr, basepath=basepath)
         # lb, all_cl_gal, all_clerr_gal, ifield_list_use = [cgps_file[key] for key in ['lb', 'all_cl_gal', 'all_clerr_gal', 'ifield_list_use']]  
         # clg = np.mean(all_cl_gal, axis=0) # used for sample variance estimate
 
-        basepath = basepath+'mock_ps_pred/TM'+str(ciber_inst)+'/field_average/'
-        pred_fpath = basepath+'pred_cls_TM'+str(ciber_inst)+'_'+galstr+'.npz'
+        if pred_fpath is None:
+            basepath = basepath+'mock_ps_pred/TM'+str(ciber_inst)+'/field_average/'
+            pred_fpath = basepath+'pred_cls_TM'+str(ciber_inst)+'_'+galstr+'.npz'
 
         galfile = np.load(pred_fpath)
         # separate shot noise from clustering
@@ -514,31 +707,137 @@ class ciber_lens_forecast():
             plt.xscale('log')
             plt.ylabel('Clg')
             plt.show()        
-        
-        
-    def load_clk(self, plot=False):
-        
-        ''' Load prediction for lensing power spectrum '''
-        
+
+    def load_clk(self, plot=False, Lmax_init=3e4, nfit_hi=30, nfit_lo=30, fac_kappa_scale=1.0):
+        """Load prediction for lensing power spectrum with power-law extrapolation."""
+
+        import numpy as np
+        import matplotlib.pyplot as plt
+        from scipy.interpolate import interp1d
+
         u = UnivPlanck15()
         halofit = Halofit(u, save=False)
         w_cmblens = WeightLensSingle(u, z_source=1100., name="cmblens")
         p2d_cmblens = P2dAuto(u, halofit, w_cmblens, save=False)
 
-        clk = p2d_cmblens.fPinterp(self.lrange)
-        
-        # Let clk continue to decrease at high ell (removed plateau)
-        
+        # Base grid for model evaluation
+        l_model = np.asarray(self.lrange, dtype=float)
+        clk_model = np.asarray(p2d_cmblens.fPinterp(l_model), dtype=float)
+
+        # Guard against non-positive values for log-space work
+        good = (l_model > 0) & (clk_model > 0)
+        if good.sum() < 5:
+            raise ValueError("Not enough positive Clk points for log-log interpolation/extrapolation.")
+
+        l_good = l_model[good]
+        c_good = clk_model[good]
+
+        # Log-log interpolator in valid range
+        log_interp = interp1d(
+            np.log(l_good),
+            np.log(c_good),
+            kind='cubic',
+            bounds_error=False,
+            fill_value=np.nan
+        )
+
+        # Fit high-L slope: log C = a_hi * log L + b_hi
+        nfit_hi = min(nfit_hi, len(l_good))
+        x_hi = np.log(l_good[-nfit_hi:])
+        y_hi = np.log(c_good[-nfit_hi:])
+        a_hi, b_hi = np.polyfit(x_hi, y_hi, 1)
+
+        # Fit low-L slope similarly (optional but useful)
+        nfit_lo = min(nfit_lo, len(l_good))
+        x_lo = np.log(l_good[:nfit_lo])
+        y_lo = np.log(c_good[:nfit_lo])
+        a_lo, b_lo = np.polyfit(x_lo, y_lo, 1)
+
+        def clk_func(ell):
+            ell = np.asarray(ell, dtype=float)
+            out = np.zeros_like(ell, dtype=float)
+
+            # In-range: log-log cubic interpolation
+            in_rng = (ell >= l_good.min()) & (ell <= l_good.max()) & (ell > 0)
+            if np.any(in_rng):
+                out[in_rng] = np.exp(log_interp(np.log(ell[in_rng])))
+
+            # High-L: power-law extrapolation
+            hi = ell > l_good.max()
+            if np.any(hi):
+                out[hi] = np.exp(b_hi) * ell[hi]**a_hi
+
+            # Low-L: power-law extrapolation
+            lo = (ell > 0) & (ell < l_good.min())
+            if np.any(lo):
+                out[lo] = np.exp(b_lo) * ell[lo]**a_lo
+
+            # Non-physical ell<=0 -> 0
+            out[ell <= 0] = 0.0
+            return out
+
+        # Evaluate on self.lrange (or any target grid you prefer)
+        self.clk = fac_kappa_scale * clk_func(self.lrange)
 
         if plot:
             plt.figure(figsize=(5, 4))
-            plt.plot(self.lrange, clk)
+            plt.plot(self.lrange, clk_model, label='raw')
+            plt.plot(self.lrange, self.clk, '--', label='interp/extrap')
             plt.yscale('log')
             plt.xscale('log')
-            plt.ylabel('Clk')
+            plt.ylabel(r'$C_L^{\kappa\kappa}$')
+            plt.xlabel(r'$L$')
+            plt.legend()
+            plt.tight_layout()
             plt.show()
+            
+    # def load_clk(self, plot=False, Lmax_init=3e4):
         
-        self.clk = clk
+    #     ''' Load prediction for lensing power spectrum '''
+        
+    #     u = UnivPlanck15()
+    #     halofit = Halofit(u, save=False)
+    #     w_cmblens = WeightLensSingle(u, z_source=1100., name="cmblens")
+    #     p2d_cmblens = P2dAuto(u, halofit, w_cmblens, save=False)
+
+    #     clk = p2d_cmblens.fPinterp(self.lrange)
+        
+    #     # Let clk continue to decrease at high ell (removed plateau)
+        
+
+    #     if plot:
+    #         plt.figure(figsize=(5, 4))
+    #         plt.plot(self.lrange, clk)
+    #         plt.yscale('log')
+    #         plt.xscale('log')
+    #         plt.ylabel('Clk')
+    #         plt.show()
+
+    #     def clk_func(ell):
+    #         result = np.zeros_like(ell, dtype=float)
+
+    #         # Use cubic interpolation where we have data
+    #         within_range = (ell >= self.lrange.min()) & (ell <= Lmax_init)
+    #         if np.any(within_range):
+    #             interp = interp1d(self.lrange, clk, kind='cubic', bounds_error=False)
+    #             result[within_range] = interp(ell[within_range])
+
+    #         # Extrapolate beyond data range using power law (now continuous at boundary)
+    #         beyond_range = ell > self.lrange.max()
+    #         if np.any(beyond_range):
+    #             result[beyond_range] = clk[-1]
+
+    #         # Below range using power law
+    #         below_range = ell < self.lrange.min()
+    #         if np.any(below_range):
+    #             result[below_range] = clk[0]
+
+    #         return result
+
+    #     # Evaluate on full lrange with smooth extrapolation
+    #     self.clk = clk_func(self.lrange)
+        
+        # self.clk = clk
 
     def forecast_nlkappa(self, include_gaussian=True, include_tris=False, beam_correct=True, 
                         nl_kappa_nongauss=None, plot=False):
@@ -584,14 +883,18 @@ class ciber_lens_forecast():
                 
                 blval = self.bl(self.lrange)
 
-                print('blval is ', blval)
+                print('bl vals are ', blval)                
+                # print('blval is ', blval)
                 
                 self.nlk_gauss /= blval**2
+
+                self.nlk_nongauss /= blval**2
                 
         if self.nlk_gauss is not None:
             self.nlk_tot += self.nlk_gauss
             
         if self.nlk_nongauss is not None:
+
             self.nlk_tot += self.nlk_nongauss
             
         if plot:
@@ -1707,7 +2010,7 @@ def plot_integrated_snr_vs_survey_params(inst=1, ifield=4,
         plt.ylim(1e-4, 1.1)
         plt.show()
 
-    clf.load_clk()
+    clf.load_clk(fac_kappa_scale=0.5)
     clf.load_clg(inst, catname=catname, galstr='hsc_i_lt_25.0_CIBERfidmask_zmax=1.0')
     clf.load_clx(clkg_scale=0.5)
     clf.forecast_nlkappa(beam_correct=True, nl_kappa_nongauss=nl_kappa_nongauss, plot=False)
@@ -1735,6 +2038,7 @@ def plot_integrated_snr_vs_survey_params(inst=1, ifield=4,
             snr = np.sqrt(snr_squared_sum)
             
             key = f'L={L_range[0]:.0f}-{L_range[1]:.0e}'
+            print('key = ', key, ' snr = ', snr)
             snr_vs_nbar[key].append(snr)
     
     print("Computing SNR vs sky area (nbar={:.0f} deg^-2)...".format(nbar_fixed))
@@ -1779,7 +2083,7 @@ def plot_integrated_snr_vs_survey_params(inst=1, ifield=4,
     ax1.set_ylim(bottom=0, top=ylim[1])
     ax1.set_xlabel('Tracer density $\\bar{n}$ [arcmin$^{-2}$]', fontsize=lab_fs)
     ax1.set_ylabel('Integrated SNR', fontsize=lab_fs)
-    ax1.text(3.0, textypos3, f'Sky area = {Adeg_fixed:.0f} deg$^2$', fontsize=16)
+    ax1.text(3.0, textypos3, f'$A_{{\\rm sur}}$ = {Adeg_fixed:.0f} deg$^2$', fontsize=16)
 
     # ax1.legend(fontsize=11)
     ax1.grid(alpha=0.3)
@@ -1800,7 +2104,13 @@ def plot_integrated_snr_vs_survey_params(inst=1, ifield=4,
             ax1.set_xticklabels(tick_labels, fontsize=11)
 
             for idx, (n, survey) in enumerate(zip(nbar_arcmin, survey_labels)):
-                ax1.text(n*0.95, textypos, survey, fontsize=text_fs, rotation=90)
+                key = f'L={L_ranges[3][0]:.0f}-{L_ranges[3][1]:.0e}'
+
+                # grab the case with 1000 < L < 5000
+                key_1000_5000 = f'L={L_ranges[3][0]:.0f}-{L_ranges[3][1]:.0e}'
+                ypos = snr_vs_nbar['L=1000-5e+03'][idx]
+                # ax1.text(n*0.95, textypos, survey, fontsize=text_fs, rotation=90)
+                ax1.text(n*0.95, 1.3*ypos, survey, fontsize=text_fs, rotation=90)
 
         else:
             print(f"Warning: survey_labels length ({len(survey_labels)}) does not match nbar_list length ({len(nbar_arcmin)})")
@@ -1818,7 +2128,7 @@ def plot_integrated_snr_vs_survey_params(inst=1, ifield=4,
                 linewidth=2, label=label)
     
     ax2.set_xscale('log')
-    ax2.set_xlabel('Sky area [deg$^2$]', fontsize=lab_fs)
+    ax2.set_xlabel('$A_{\\rm sur}$ [deg$^2$]', fontsize=lab_fs)
     ax2.set_xlim(100, 30000)
     ax2.set_ylabel('Integrated SNR', fontsize=lab_fs)
     # ax2.set_yscale('log')

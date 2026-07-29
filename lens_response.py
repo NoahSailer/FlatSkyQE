@@ -1177,7 +1177,10 @@ def plot_snr_shear_mag_fisher_threepanel(
     shear_lmax=4e4,
     mag_lmin = 2000,
     textxpos=1.5e4, 
-    textypos=1e9
+    textypos=1e9,
+    text_fs=18,
+    figsize_single=(7, 4.5),
+    bbox_to_anchor=[-0.05, 1.2]
 ):
     """
     Three-panel plot showing shear/magnification SNR integrands and magnification fraction vs ell_max.
@@ -1237,12 +1240,19 @@ def plot_snr_shear_mag_fisher_threepanel(
 
     ell_arr_full = np.geomspace(max(ellmin, min(L_values)), ellmax, Nell)
 
+    snr_data_notris = {}
+
     for i, L in enumerate(L_values):
         ell_arr = np.geomspace(max(ellmin, L), ellmax, Nell)
         snr_quad, snr_iso = compute_snr_integrand(
             ell_arr, L, C_L, A, B, n, Ntheta, Nphi, cell_interp, exact_response, N_tris=N_tris_list
         )
         snr_data[L] = {'ell_arr': ell_arr, 'snr_quad': snr_quad, 'snr_iso': snr_iso}
+
+        snr_quad_notris, snr_iso_notris = compute_snr_integrand(
+            ell_arr, L, C_L, A, B, n, Ntheta, Nphi, cell_interp, exact_response, N_tris=[0.0]
+        )
+        snr_data_notris[L] = {'ell_arr': ell_arr, 'snr_quad': snr_quad_notris, 'snr_iso': snr_iso_notris}
 
     # --- Panel 1: Shear SNR integrand ---
 
@@ -1277,9 +1287,9 @@ def plot_snr_shear_mag_fisher_threepanel(
     ax_shear.legend(fontsize=legend_fs, ncol=1, loc=2)
 
     if N_tris_list[0]==0.:
-        ax_shear.text(textxpos, textypos, r"$N_{L}^{\rm tris} = 0$", fontsize=lab_fs)
+        ax_shear.text(textxpos, textypos, r"$N_{L}^{\rm \kappa, NG} = 0$", fontsize=lab_fs)
     else:
-        ax_shear.text(textxpos, textypos, r"$N_{L}^{\rm tris} = 10^{"+str(int(np.log10(N_tris)))+"}$", fontsize=lab_fs)
+        ax_shear.text(textxpos, textypos, r"$N_{L}^{\rm \kappa, NG} = 10^{"+str(int(np.log10(N_tris)))+"}$", fontsize=lab_fs)
     if ylim_snr is not None:
         ax_shear.set_ylim(ylim_snr)
 
@@ -1296,6 +1306,15 @@ def plot_snr_shear_mag_fisher_threepanel(
             label = rf"$L={L}$" if j == 0 else None
             ax_mag.plot(ell_arr[ell_arr > mag_lmin], snr_iso_case[ell_arr > mag_lmin], color=red_color, ls=ls, lw=linewidth, label=label)
 
+            if i==len(L_values)-1 and j==0:
+                print('L, j', L, j)
+            #     # Overlay the N_tris=0 case for comparison
+                snr_iso_notris_case = snr_data_notris[300]['snr_iso'][0]
+                ell_arr = snr_data_notris[300]['ell_arr']
+                label = '$(N_L^{\\rm \\kappa, NG} = 0)$'
+                ax_mag.plot(ell_arr[ell_arr > mag_lmin], snr_iso_notris_case[ell_arr > mag_lmin], color='grey', ls='dashed', lw=linewidth, label=label, zorder=-5)
+
+
     if plot_xmin is not None:
         ax_mag.set_xlim(plot_xmin, ellmax)
     ax_mag.set_xscale("log")
@@ -1309,15 +1328,100 @@ def plot_snr_shear_mag_fisher_threepanel(
         ax_mag.set_ylim(ylim_snr)
 
     if N_tris_list[0]==0.:
-        ax_mag.text(textxpos, textypos, r"$N_{L}^{\rm tris} = 0$", fontsize=lab_fs)
+        ax_mag.text(textxpos, textypos, r"$N_{L}^{\rm \kappa, NG} = 0$", fontsize=lab_fs)
     else:
-        ax_mag.text(textxpos, textypos, r"$N_{L}^{\rm tris} = 10^{"+str(int(np.log10(N_tris_list[0])))+"}$", fontsize=lab_fs)
+        ax_mag.text(textxpos, textypos, r"$N_{L}^{\rm \kappa, NG} = 10^{"+str(int(np.log10(N_tris_list[0])))+"}$", fontsize=lab_fs)
 
     plt.subplots_adjust(wspace=0.1)
 
 
+
+
     for ax in [ax_shear, ax_mag]:
         ax.tick_params(labelsize=12)
+
+
+    # single panel figure version
+
+    fig_single, ax = plt.subplots(figsize=figsize_single, sharey=True)
+
+    # for shear, discard high ell values which have numerical issues. 
+
+    for i, (L, col) in enumerate(zip(L_values, colors)):
+        blue_color = plt.cm.Blues(0.4 + 0.4 * (i / max(len(L_values) - 1, 1)))
+        ell_arr = snr_data[L]['ell_arr']
+        snr_quad = snr_data[L]['snr_quad']
+
+        for j, snr_quad_case in enumerate(snr_quad):
+            ls = linestyles[j % len(linestyles)]
+            label = rf"$L={L}$" if j == 0 else None
+
+            ax.plot(ell_arr[ell_arr <= shear_lmax], snr_quad_case[ell_arr <= shear_lmax], color=blue_color, ls=ls, lw=linewidth, label=label)
+
+    if plot_xmin is not None:
+        ax.set_xlim(plot_xmin, ellmax)
+
+    ax.legend(fontsize=legend_fs, ncol=1, loc=2)
+    ax.tick_params(labelsize=12)
+
+    if ylim_snr is not None:
+        ax.set_ylim(ylim_snr)
+
+    # --- Panel 2: Magnification SNR integrand ---
+
+    for i, (L, col) in enumerate(zip(L_values, colors)):
+        red_color = plt.cm.Reds(0.4 + 0.4 * (i / max(len(L_values) - 1, 1)))
+        ell_arr = snr_data[L]['ell_arr']
+        snr_iso = snr_data[L]['snr_iso']
+
+        for j, snr_iso_case in enumerate(snr_iso):
+            ls = linestyles[j % len(linestyles)]
+            label = rf"$L={L}$" if j == 0 else None
+            ax.plot(ell_arr[ell_arr > mag_lmin], snr_iso_case[ell_arr > mag_lmin], color=red_color, ls=ls, lw=linewidth, label=label)
+
+            if i==len(L_values)-1 and j==0:
+                print('L, j', L, j)
+            #     # Overlay the N_tris=0 case for comparison
+                snr_iso_notris_case = snr_data_notris[300]['snr_iso'][0]
+                ell_arr = snr_data_notris[300]['ell_arr']
+                # label = '$(N_L^{\\rm \\kappa, NG} = 0)$'
+                label = None
+                ax.plot(ell_arr[ell_arr > mag_lmin], snr_iso_notris_case[ell_arr > mag_lmin], color='grey', ls='dashed', lw=linewidth, label=label, zorder=-5)
+
+
+    if plot_xmin is not None:
+        ax.set_xlim(plot_xmin, ellmax)
+
+    x = N_tris_list[0]
+    sci = f"{x:.0e}"              # e.g. '5e-09'
+    mant, exp = sci.split('e')    # mant='5', exp='-09'
+    exp = int(exp)  
+    label = rf"$N_{{L}}^{{\rm \kappa, NG}} = {mant}\times10^{{{exp}}}$"
+
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel(r"$\ell$", fontsize=lab_fs)
+    ax.set_ylabel(r"$d[\mathrm{SNR}(\phi_L)^2]/d\ln\ell$", fontsize=lab_fs)
+    ax.text(1.1*plot_xmin, 5e8, "Shear", fontsize=text_fs, color=plt.cm.Blues(0.8))
+    ax.text(1.1*plot_xmin, 3e9, "Magnification ("+label+")", fontsize=text_fs, color=plt.cm.Reds(0.8))
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=legend_fs, ncol=4, loc=2, bbox_to_anchor=bbox_to_anchor)
+    if ylim_snr is not None:
+        ax.set_ylim(ylim_snr)
+
+    ax.text(textxpos, textypos, r"$N_{L}^{\rm \kappa, NG} = 0$", fontsize=lab_fs, rotation=25, color='grey')
+
+    # if N_tris_list[0]==0.:
+    #     ax.text(textxpos, textypos, r"$N_{L}^{\rm \kappa, NG} = 0$", fontsize=lab_fs, rotation=45)
+    # else:
+    #     ax.text(textxpos, textypos, r"$N_{L}^{\rm \kappa, NG} = 10^{"+str(int(np.log10(N_tris_list[0])))+"}$", fontsize=lab_fs)
+
+    plt.subplots_adjust(wspace=0.1)
+
+
+
+
     # --- Panel 3: Magnification fraction vs ell_max (for all N_tris variations) ---
     fig_fraction, ax_fisher = plt.subplots(figsize=(6, 4))
 
@@ -1414,6 +1518,6 @@ def plot_snr_shear_mag_fisher_threepanel(
     ax_cumul.legend(fontsize=legend_fs, ncol=2, loc=2, bbox_to_anchor=(-0.05, 1.45))
     ax_cumul.tick_params(labelsize=12)
     
-    return fig, fig_fraction, fig_cumul
+    return fig, fig_fraction, fig_cumul, fig_single
 
 
